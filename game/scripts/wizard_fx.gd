@@ -252,7 +252,7 @@ func update_look(silhouette: Image, sil_center: Vector2i, sil_rect: Rect2, joint
 		# relative to the standing figure, keeping the character one size.
 		const POSE_HEIGHT := {"idle": 1.0, "cast": 0.97, "shield": 1.22, "hit": 0.9,
 			"collapse": 0.55, "prone": 0.24, "victory": 1.12}
-		var target_h := (feet_y - head.y) * 1.35 + 40.0
+		var target_h := (feet_y - head.y) * 1.08 + 20.0
 		var scale := target_h * float(POSE_HEIGHT.get(_pose, 1.0)) / tex.get_height()
 		var size := Vector2(tex.get_size()) * scale
 		_body.texture = tex
@@ -427,7 +427,7 @@ func _draw() -> void:
 	var deep := Color(1.0, 0.35, 0.05) if element == "fire" else Color(0.2, 0.5, 1.0)
 	var t := Time.get_ticks_msec() / 1000.0
 	var center := Vector2(_body_rect.get_center().x, _feet_y + 6.0)
-	var r := 210.0
+	var r := 175.0
 	if _circle_tex != null:
 		# Generated rune circle, tinted, flattened onto the floor and slowly turning.
 		draw_set_transform(center, t * 0.15, Vector2(1.0, 0.3))
