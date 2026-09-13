@@ -27,7 +27,12 @@ var _robe_material: ShaderMaterial
 var _sil_tex: ImageTexture = null
 
 var _body_rect := Rect2()      # where the body mask lands in local space
-var _pose_tex: Dictionary = {}  # "idle"/"cast"/"shield"/"hit" -> Texture2D, when art exists
+var _pose_tex: Dictionary = {}     # pose -> Texture2D (single still), when art exists
+var _pose_frames: Dictionary = {}  # pose -> Array[Texture2D] animation frames, when art exists
+var _anim_pose := ""
+var _anim_started := 0.0
+const ANIM_FPS := {"idle": 5.0, "cast": 12.0, "shield": 12.0, "hit": 10.0, "collapse": 8.0, "victory": 6.0}
+const ANIM_LOOPS := {"idle": true, "victory": true}
 var _circle_tex: Texture2D = null
 var _barrier_tex: Texture2D = null
 var _shards_tex: Texture2D = null
@@ -122,6 +127,14 @@ func _load_art() -> void:
 		var path := "res://art/%s_%s.png" % [element, pose]
 		if ResourceLoader.exists(path):
 			_pose_tex[pose] = load(path)
+		var frames: Array = []
+		for i in 12:
+			var fpath := "res://art/%s_%s_%d.png" % [element, pose, i]
+			if not ResourceLoader.exists(fpath):
+				break
+			frames.append(load(fpath))
+		if frames.size() > 1:
+			_pose_frames[pose] = frames
 	if ResourceLoader.exists("res://art/spell_circle.png"):
 		_circle_tex = load("res://art/spell_circle.png")
 	var barrier := "res://art/%s_barrier.png" % element
@@ -132,7 +145,31 @@ func _load_art() -> void:
 
 
 func has_pose_art() -> bool:
-	return _pose_tex.has("idle")
+	return _pose_tex.has("idle") or _pose_frames.has("idle")
+
+
+## Length in seconds of a one-shot animation, 0 when the pose is a still.
+func _anim_length(pose: String) -> float:
+	if not _pose_frames.has(pose):
+		return 0.0
+	return (_pose_frames[pose] as Array).size() / float(ANIM_FPS.get(pose, 8.0))
+
+
+## Texture for the pose right now: the animation frame if frames exist, else the still.
+## One-shot animations hold their last frame once finished.
+func _frame_for(pose: String, now: float) -> Texture2D:
+	if pose != _anim_pose:
+		_anim_pose = pose
+		_anim_started = now
+	if _pose_frames.has(pose):
+		var frames: Array = _pose_frames[pose]
+		var idx := int((now - _anim_started) * float(ANIM_FPS.get(pose, 8.0)))
+		if ANIM_LOOPS.get(pose, false):
+			idx = idx % frames.size()
+		else:
+			idx = mini(idx, frames.size() - 1)
+		return frames[idx]
+	return _pose_tex.get(pose, _pose_tex.get("idle"))
 
 
 func _make_hand_particles() -> CPUParticles2D:
@@ -230,21 +267,23 @@ func update_look(silhouette: Image, sil_center: Vector2i, sil_rect: Rect2, joint
 	if has_pose_art():
 		# Pose sprite: bottom on the feet, centred on the body, sized to the tracked height.
 		var want := "idle"
-		var since := Time.get_ticks_msec() / 1000.0 - _outcome_since
+		var now := Time.get_ticks_msec() / 1000.0
+		var since := now - _outcome_since
+		var collapse_len := maxf(0.7, _anim_length("collapse"))
 		if _outcome == "lose":
-			want = "collapse" if since < 0.7 else "prone"
+			want = "collapse" if (since < collapse_len or _pose_frames.has("collapse")) else "prone"
 		elif _outcome == "win":
 			want = "victory"
-		elif hit_flash > 0.0:
+		elif hit_flash > 0.0 or (_anim_pose == "hit" and now - _anim_started < _anim_length("hit")):
 			want = "hit"
 		elif shield_up:
 			want = "shield"
-		elif cast_flash > 0.0:
+		elif cast_flash > 0.0 or (_anim_pose == "cast" and now - _anim_started < _anim_length("cast")):
 			want = "cast"
-		if not _pose_tex.has(want):
-			want = "hit" if want == "collapse" and _pose_tex.has("hit") else "idle"
+		if not (_pose_tex.has(want) or _pose_frames.has(want)):
+			want = "hit" if want == "collapse" and (_pose_tex.has("hit") or _pose_frames.has("hit")) else "idle"
 		_pose = want
-		var tex: Texture2D = _pose_tex[_pose]
+		var tex: Texture2D = _frame_for(_pose, now)
 		var center_x := head.x
 		if joints.has("SpineBase"):
 			center_x = (joints["SpineBase"] as Vector2).x
@@ -253,7 +292,12 @@ func update_look(silhouette: Image, sil_center: Vector2i, sil_rect: Rect2, joint
 		const POSE_HEIGHT := {"idle": 1.0, "cast": 0.97, "shield": 1.22, "hit": 0.9,
 			"collapse": 0.55, "prone": 0.24, "victory": 1.12}
 		var target_h := (feet_y - head.y) * 1.08 + 20.0
-		var scale := target_h * float(POSE_HEIGHT.get(_pose, 1.0)) / tex.get_height()
+		# Animation strips are cut to one uniform height (the standing figure, or the
+		# raised arms for the shield), so they use a flatter factor than the stills.
+		var factor := float(POSE_HEIGHT.get(_pose, 1.0))
+		if _pose_frames.has(_pose):
+			factor = 1.22 if _pose == "shield" else 1.0
+		var scale := target_h * factor / tex.get_height()
 		var size := Vector2(tex.get_size()) * scale
 		_body.texture = tex
 		_body.flip_h = _facing < 0

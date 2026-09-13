@@ -2,10 +2,15 @@ extends SceneTree
 ## Keys a flat magenta background to alpha and splits a one-row pose sheet into
 ## separate PNGs by scanning for empty columns.
 ##
-##   godot --headless -s tools/split_sheet.gd -- <sheet.png> <out_dir> <prefix> [pose names...]
+##   godot --headless -s tools/split_sheet.gd -- <sheet.png> <out_dir> <prefix> [--uniform] [pose names...]
 ##   godot --headless -s tools/split_sheet.gd -- images/fire_wizard_sheet.png game/art fire idle cast shield hit
+##   godot --headless -s tools/split_sheet.gd -- images/fire_anim_idle.png game/art fire --uniform idle_0 idle_1 idle_2 idle_3
 ##
 ## With no pose names the pieces are saved as <prefix>_0.png, <prefix>_1.png ...
+## --uniform gives every piece the same height (the union of all pieces, so the
+## feet stay on one baseline), for animation frames that must not jitter.
+## --frames=N slices N equal columns when effects bridge the gaps between frames
+## (each column is still trimmed to its own content horizontally).
 
 const KEY := Color(1.0, 0.0, 1.0)
 const KEY_INNER := 0.22    # colour distance below which a pixel is pure background
@@ -23,7 +28,16 @@ func _init() -> void:
 	var src: String = args[0]
 	var out_dir: String = args[1]
 	var prefix: String = args[2]
-	var names: Array = args.slice(3)
+	var uniform := false
+	var frame_count := 0
+	var names: Array = []
+	for a in args.slice(3):
+		if a == "--uniform":
+			uniform = true
+		elif a.begins_with("--frames="):
+			frame_count = int(a.get_slice("=", 1))
+		else:
+			names.append(a)
 
 	var img := Image.new()
 	var err := img.load(src)
@@ -35,7 +49,19 @@ func _init() -> void:
 	_key_magenta(img)
 
 	var pieces := _split_columns(img)
-	print("%s: %dx%d, %d pieces" % [src, img.get_width(), img.get_height(), pieces.size()])
+	if frame_count > 0 and pieces.size() != frame_count:
+		print("column scan found %d pieces, slicing %d equal columns instead" % [pieces.size(), frame_count])
+		pieces = _split_equal(img, frame_count)
+	if uniform and pieces.size() > 1:
+		var top := img.get_height()
+		var bottom := 0
+		for r in pieces:
+			top = mini(top, r.position.y)
+			bottom = maxi(bottom, r.end.y)
+		for i in pieces.size():
+			var r: Rect2i = pieces[i]
+			pieces[i] = Rect2i(r.position.x, top, r.size.x, bottom - top)
+	print("%s: %dx%d, %d pieces%s" % [src, img.get_width(), img.get_height(), pieces.size(), " (uniform height)" if uniform else ""])
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	for i in pieces.size():
 		var rect: Rect2i = pieces[i]
@@ -64,6 +90,30 @@ func _key_magenta(img: Image) -> void:
 					clampf((c.g - (1.0 - a) * KEY.g) / a, 0.0, 1.0),
 					clampf((c.b - (1.0 - a) * KEY.b) / a, 0.0, 1.0), a)
 				img.set_pixel(x, y, fg)
+
+
+## N equal columns, each trimmed to its own content.
+func _split_equal(img: Image, n: int) -> Array:
+	var w := img.get_width()
+	var h := img.get_height()
+	var pieces: Array = []
+	for k in n:
+		var x0 := int(w * k / float(n))
+		var x1 := int(w * (k + 1) / float(n)) - 1
+		var left := x1
+		var right := x0
+		var top := h
+		var bottom := -1
+		for y in h:
+			for x in range(x0, x1 + 1):
+				if img.get_pixel(x, y).a > 0.5:
+					left = mini(left, x)
+					right = maxi(right, x)
+					top = mini(top, y)
+					bottom = maxi(bottom, y)
+		if bottom >= 0:
+			pieces.append(Rect2i(left, top, right - left + 1, bottom - top + 1))
+	return pieces
 
 
 func _split_columns(img: Image) -> Array:
