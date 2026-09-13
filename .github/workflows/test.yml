@@ -1,0 +1,122 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+  ORBBEC_SDK_TAG: "v2.9.3"
+
+jobs:
+  # The depth-only people tracker has no SDK or Godot dependency: plain g++.
+  tracker-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile and run the tracker unit test
+        working-directory: extension
+        run: |
+          g++ -std=c++17 -O2 -Wall -Isrc tests/body_tracker_test.cpp src/body_tracker.cpp -o body_tracker_test
+          ./body_tracker_test
+
+  # Runs the Godot project headless against the mock UDP bridge. The OrbbecCamera
+  # extension is not built here, so the log says the extension is not loaded and
+  # the game falls back to UDP; that is expected.
+  game-headless:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Godot
+        run: |
+          v="$GODOT_VERSION"
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${v}-stable/Godot_v${v}-stable_linux.x86_64.zip"
+          mkdir -p godot
+          unzip -q godot.zip -d godot
+          chmod +x "godot/Godot_v${v}-stable_linux.x86_64"
+          echo "GODOT=$PWD/godot/Godot_v${v}-stable_linux.x86_64" >> "$GITHUB_ENV"
+          "$PWD/godot/Godot_v${v}-stable_linux.x86_64" --version
+
+      - name: Start the mock tracking bridge
+        run: |
+          python3 -u tools/mock_bridge.py > mock.log 2>&1 &
+          echo "MOCK_PID=$!" >> "$GITHUB_ENV"
+          sleep 1
+          kill -0 "$!"
+
+      - name: Import the project
+        run: |
+          "$GODOT" --headless --path game --import
+
+      - name: Run the game headless
+        run: |
+          "$GODOT" --headless --path game --quit-after 1500 2>&1 | tee game.log
+
+      - name: Check the game log
+        run: |
+          if ! grep -q "round: fight" game.log; then
+            echo "::error::game.log does not contain 'round: fight'"
+            exit 1
+          fi
+          if grep -q "SCRIPT ERROR" game.log; then
+            echo "::error::game.log contains SCRIPT ERROR"
+            exit 1
+          fi
+          echo "headless round reached the fight state with no script errors"
+
+      - name: Stop the mock bridge
+        if: always()
+        run: |
+          if [ -n "${MOCK_PID:-}" ]; then kill "$MOCK_PID" 2>/dev/null || true; fi
+          echo "--- mock.log ---"
+          cat mock.log 2>/dev/null | tail -n 20 || true
+
+  # Builds the OrbbecCamera GDExtension for Linux x86_64 against OrbbecSDK v2.
+  extension-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SCons
+        run: pip install scons
+
+      - name: Download Orbbec SDK
+        run: |
+          url=$(curl -sSL "https://api.github.com/repos/orbbec/OrbbecSDK_v2/releases/tags/$ORBBEC_SDK_TAG" \
+            | python3 -c "import json,sys,fnmatch; a=[x for x in json.load(sys.stdin)['assets'] if fnmatch.fnmatch(x['name'],'OrbbecSDK_v2*linux_x86_64.tar.gz')]; print(a[0]['browser_download_url'])")
+          echo "Using $url"
+          curl -sSL -o orbbec_sdk.tar.gz "$url"
+          mkdir -p orbbec_sdk
+          tar xzf orbbec_sdk.tar.gz --strip-components=1 -C orbbec_sdk
+          test -f orbbec_sdk/include/libobsensor/ObSensor.hpp
+          ls orbbec_sdk orbbec_sdk/lib
+
+      - name: Cache godot-cpp objects
+        uses: actions/cache@v4
+        with:
+          path: |
+            extension/godot-cpp/bin
+            extension/godot-cpp/gen
+            extension/godot-cpp/src/**/*.o
+            extension/godot-cpp/gen/**/*.o
+          key: godot-cpp-${{ runner.os }}-${{ hashFiles('extension/godot-cpp/gdextension/extension_api.json') }}-gcc-v1
+
+      - name: Build extension (release)
+        working-directory: extension
+        run: scons platform=linux target=template_release orbbec_sdk="$GITHUB_WORKSPACE/orbbec_sdk" -j4
+
+      - name: Check the built library
+        run: |
+          lib=game/bin/linux/liborbbecwizard.linux.template_release.x86_64.so
+          test -f "$lib" || { echo "::error::$lib was not built"; ls -R game/bin || true; exit 1; }
+          ls -l game/bin/linux
+          file "$lib"

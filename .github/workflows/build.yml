@@ -1,0 +1,178 @@
+name: Build game
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+  ORBBEC_SDK_TAG: "v2.9.3"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SCons
+        run: pip install scons
+
+      - name: Download Orbbec SDK
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod "https://api.github.com/repos/orbbec/OrbbecSDK_v2/releases/tags/$env:ORBBEC_SDK_TAG"
+          $asset = $release.assets | Where-Object { $_.name -like "OrbbecSDK_v2*win_x64.zip" } | Select-Object -First 1
+          Write-Host "Using $($asset.name)"
+          Invoke-WebRequest $asset.browser_download_url -OutFile orbbec_sdk.zip
+          Expand-Archive orbbec_sdk.zip -DestinationPath orbbec_sdk_unpacked
+          $inner = Get-ChildItem orbbec_sdk_unpacked | Select-Object -First 1
+          if ($inner.PSIsContainer -and (Test-Path (Join-Path $inner.FullName "include"))) { $root = $inner.FullName } else { $root = (Resolve-Path orbbec_sdk_unpacked).Path }
+          "ORBBEC_SDK_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "SDK root: $root"
+
+      - name: Cache godot-cpp objects
+        uses: actions/cache@v4
+        with:
+          path: |
+            extension/godot-cpp/bin
+            extension/godot-cpp/gen
+            extension/godot-cpp/src/**/*.obj
+            extension/godot-cpp/gen/**/*.obj
+          key: godot-cpp-${{ runner.os }}-${{ hashFiles('extension/godot-cpp/gdextension/extension_api.json') }}-msvc-v1
+
+      - name: Build extension (release)
+        working-directory: extension
+        run: scons platform=windows target=template_release orbbec_sdk="$env:ORBBEC_SDK_DIR" -j4
+
+      - name: Build extension (debug, for the editor)
+        working-directory: extension
+        run: scons platform=windows target=template_debug orbbec_sdk="$env:ORBBEC_SDK_DIR" -j4
+
+      - name: Download Godot and export templates
+        shell: pwsh
+        run: |
+          $v = $env:GODOT_VERSION
+          Invoke-WebRequest "https://github.com/godotengine/godot/releases/download/$v-stable/Godot_v$v-stable_win64.exe.zip" -OutFile godot.zip
+          Expand-Archive godot.zip -DestinationPath godot
+          Invoke-WebRequest "https://github.com/godotengine/godot/releases/download/$v-stable/Godot_v$v-stable_export_templates.tpz" -OutFile templates.tpz
+          Expand-Archive templates.tpz -DestinationPath templates
+          $dest = "$env:APPDATA\Godot\export_templates\$v.stable"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item templates\templates\* $dest -Recurse -Force
+
+      - name: Export Windows build
+        shell: pwsh
+        run: |
+          $godot = (Get-ChildItem godot -Filter "Godot_v*_win64_console.exe" | Select-Object -First 1).FullName
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          & $godot --headless --path game --import
+          & $godot --headless --path game --export-release "Windows Desktop" "$PWD\dist\WizardWars.exe"
+          if (-not (Test-Path dist\WizardWars.exe)) { throw "export failed" }
+
+      - name: Stage Orbbec runtime next to the exe
+        shell: pwsh
+        run: |
+          Copy-Item "$env:ORBBEC_SDK_DIR\bin\OrbbecSDK.dll" dist -Force
+          Copy-Item "$env:ORBBEC_SDK_DIR\bin\extensions" dist\extensions -Recurse -Force
+          Copy-Item tools\mock_bridge.py dist -Force
+          Copy-Item README.md dist -Force
+          Get-ChildItem dist -Recurse | Select-Object FullName, Length
+
+      - name: Smoke test the exported exe
+        shell: pwsh
+        run: |
+          $log = & dist\WizardWars.console.exe --headless --quit-after 60 2>&1 | Out-String
+          Write-Host $log
+          if ($log -notmatch "OrbbecCamera extension") { throw "extension did not load in the exported build" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WizardWars-windows-x64
+          path: dist
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SCons
+        run: pip install scons
+
+      - name: Download Orbbec SDK
+        run: |
+          url=$(curl -sSL "https://api.github.com/repos/orbbec/OrbbecSDK_v2/releases/tags/$ORBBEC_SDK_TAG" \
+            | python3 -c "import json,sys,fnmatch; d=json.load(sys.stdin); print(next(a['browser_download_url'] for a in d['assets'] if fnmatch.fnmatch(a['name'], 'OrbbecSDK_v2*linux_x86_64.tar.gz')))")
+          echo "Using $url"
+          curl -sSL -o orbbec_sdk.tar.gz "$url"
+          mkdir -p orbbec_sdk && tar xzf orbbec_sdk.tar.gz --strip-components=1 -C orbbec_sdk
+          test -f orbbec_sdk/include/libobsensor/ObSensor.hpp
+          echo "ORBBEC_SDK_DIR=$GITHUB_WORKSPACE/orbbec_sdk" >> "$GITHUB_ENV"
+
+      - name: Cache godot-cpp objects
+        uses: actions/cache@v4
+        with:
+          path: |
+            extension/godot-cpp/bin
+            extension/godot-cpp/gen
+            extension/godot-cpp/src/**/*.o
+            extension/godot-cpp/gen/**/*.o
+          key: godot-cpp-${{ runner.os }}-${{ hashFiles('extension/godot-cpp/gdextension/extension_api.json') }}-gcc-v1
+
+      - name: Build extension (release and debug)
+        working-directory: extension
+        run: |
+          scons platform=linux target=template_release orbbec_sdk="$ORBBEC_SDK_DIR" -j4
+          scons platform=linux target=template_debug orbbec_sdk="$ORBBEC_SDK_DIR" -j4
+          ls -l ../game/bin/linux
+
+      - name: Download Godot and export templates
+        run: |
+          v="$GODOT_VERSION"
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/$v-stable/Godot_v$v-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d godot && chmod +x godot/Godot_v$v-stable_linux.x86_64
+          curl -sSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/$v-stable/Godot_v$v-stable_export_templates.tpz"
+          mkdir -p templates && unzip -q templates.tpz -d templates
+          dest="$HOME/.local/share/godot/export_templates/$v.stable"
+          mkdir -p "$dest" && cp -r templates/templates/* "$dest"/
+          echo "GODOT=$PWD/godot/Godot_v$v-stable_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Export Linux build
+        run: |
+          mkdir -p dist
+          "$GODOT" --headless --path game --import
+          "$GODOT" --headless --path game --export-release "Linux" "$PWD/dist/WizardWars.x86_64"
+          test -f dist/WizardWars.x86_64
+
+      - name: Stage Orbbec runtime next to the binary
+        run: |
+          cp orbbec_sdk/lib/libOrbbecSDK.so* dist/
+          cp -r orbbec_sdk/lib/extensions dist/extensions
+          cp tools/mock_bridge.py README.md dist/
+          ls -l dist
+
+      - name: Smoke test the exported binary
+        run: |
+          chmod +x dist/WizardWars.x86_64
+          log=$(dist/WizardWars.x86_64 --headless --quit-after 60 2>&1 || true)
+          echo "$log"
+          echo "$log" | grep -q "OrbbecCamera extension loaded"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WizardWars-linux-x64
+          path: dist

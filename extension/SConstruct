@@ -1,0 +1,64 @@
+#!/usr/bin/env python
+"""Builds the OrbbecCamera GDExtension.
+
+    cd extension
+    scons platform=windows target=template_release orbbec_sdk=C:/path/to/OrbbecSDK_v2.x_win_x64
+    scons platform=linux   target=template_release orbbec_sdk=/path/to/OrbbecSDK_v2.x_linux_arm64
+
+`orbbec_sdk` is the unpacked SDK release folder (it has include/ and lib/).
+Defaults to $ORBBEC_SDK_DIR. Output goes to ../game/bin/<platform>/ and the
+SDK's runtime library plus its extensions/ folder are copied next to it.
+"""
+import os
+import shutil
+import sys
+
+# The Orbbec C++ wrappers report errors with exceptions; godot-cpp turns them off by default.
+ARGUMENTS.setdefault("disable_exceptions", "no")
+env = SConscript("godot-cpp/SConstruct")
+
+opts = Variables([], ARGUMENTS)
+opts.Add("orbbec_sdk", "Unpacked OrbbecSDK v2 release directory", os.environ.get("ORBBEC_SDK_DIR", ""))
+opts.Update(env)
+
+sdk = env.get("orbbec_sdk", "")
+if not sdk or not os.path.isfile(os.path.join(sdk, "include", "libobsensor", "ObSensor.hpp")):
+    print("OrbbecSDK not found. Pass orbbec_sdk=<unpacked SDK dir> (with include/ and lib/).")
+    sys.exit(1)
+
+env.Append(CPPPATH=["src/", os.path.join(sdk, "include")])
+env.Append(LIBPATH=[os.path.join(sdk, "lib")])
+env.Append(LIBS=["OrbbecSDK"])
+if env["platform"] == "linux":
+    env.Append(LINKFLAGS=["-Wl,-rpath,'$$ORIGIN'"])
+    env.Append(LIBS=["dl"])
+
+sources = Glob("src/*.cpp")
+out_dir = os.path.join("..", "game", "bin", env["platform"])
+library = env.SharedLibrary(
+    os.path.join(out_dir, "liborbbecwizard{}{}".format(env["suffix"], env["SHLIBSUFFIX"])),
+    source=sources,
+)
+
+
+def stage_runtime(target, source, env):
+    """Copy OrbbecSDK's runtime library and extensions next to our library."""
+    dest = os.path.abspath(out_dir)
+    os.makedirs(dest, exist_ok=True)
+    if env["platform"] == "windows":
+        runtime_files = [os.path.join(sdk, "bin", "OrbbecSDK.dll")]
+        ext_src = os.path.join(sdk, "bin", "extensions")
+    else:
+        lib_dir = os.path.join(sdk, "lib")
+        runtime_files = [os.path.join(lib_dir, f) for f in os.listdir(lib_dir) if f.startswith("libOrbbecSDK.so")]
+        ext_src = os.path.join(lib_dir, "extensions")
+    for f in runtime_files:
+        if os.path.isfile(f):
+            shutil.copy2(f, dest)
+    if os.path.isdir(ext_src):
+        shutil.copytree(ext_src, os.path.join(dest, "extensions"), dirs_exist_ok=True)
+    return 0
+
+
+staged = env.Command(os.path.join(out_dir, ".runtime-staged"), library, [stage_runtime, Touch("$TARGET")])
+Default(library, staged)

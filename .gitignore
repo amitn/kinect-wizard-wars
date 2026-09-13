@@ -1,0 +1,35 @@
+# Godot
+game/.godot/
+game/export/
+*.import
+
+# .NET
+bridge/bin/
+bridge/obj/
+
+# Python
+__pycache__/
+*.pyc
+
+# GDExtension build output (built on the Windows PC)
+game/bin/**/*.dll
+game/bin/**/*.lib
+game/bin/**/*.exp
+game/bin/**/*.pdb
+game/bin/**/*.ilk
+extension/src/*.obj
+extension/src/*.os
+extension/.sconsign.dblite
+extension/gen_inc/
+game/bin/**/*.so*
+game/bin/**/extensions/
+game/bin/**/.runtime-staged
+extension/src/*.o
+extension/gen_inc/
+dist/
+
+# Raw generated sheets (split results live in game/art)
+images/
+
+# Orbbec SDK runtime log
+game/Log/
