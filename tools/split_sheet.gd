@@ -11,6 +11,8 @@ extends SceneTree
 ## feet stay on one baseline), for animation frames that must not jitter.
 ## --frames=N slices N equal columns when effects bridge the gaps between frames
 ## (each column is still trimmed to its own content horizontally).
+## --key=black keys a black background instead of magenta (alpha from brightness),
+## for additive effect strips.
 
 const KEY := Color(1.0, 0.0, 1.0)
 const KEY_INNER := 0.22    # colour distance below which a pixel is pure background
@@ -30,12 +32,15 @@ func _init() -> void:
 	var prefix: String = args[2]
 	var uniform := false
 	var frame_count := 0
+	var key_black := false
 	var names: Array = []
 	for a in args.slice(3):
 		if a == "--uniform":
 			uniform = true
 		elif a.begins_with("--frames="):
 			frame_count = int(a.get_slice("=", 1))
+		elif a == "--key=black":
+			key_black = true
 		else:
 			names.append(a)
 
@@ -46,7 +51,10 @@ func _init() -> void:
 		quit(1)
 		return
 	img.convert(Image.FORMAT_RGBA8)
-	_key_magenta(img)
+	if key_black:
+		_key_black(img)
+	else:
+		_key_magenta(img)
 
 	var pieces := _split_columns(img)
 	if frame_count > 0 and pieces.size() != frame_count:
@@ -71,6 +79,18 @@ func _init() -> void:
 		piece.save_png(path)
 		print("  %s  %dx%d at x=%d" % [path, rect.size.x, rect.size.y, rect.position.x])
 	quit(0)
+
+
+## Alpha from brightness; the colour is kept so additive blending looks the same.
+func _key_black(img: Image) -> void:
+	var w := img.get_width()
+	var h := img.get_height()
+	for y in h:
+		for x in w:
+			var c := img.get_pixel(x, y)
+			var lum := maxf(c.r, maxf(c.g, c.b))
+			var a := clampf((lum - 0.04) / 0.5, 0.0, 1.0)
+			img.set_pixel(x, y, Color(c.r, c.g, c.b, a))
 
 
 func _key_magenta(img: Image) -> void:

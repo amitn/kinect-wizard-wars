@@ -20,6 +20,7 @@ var alive := true
 
 var _particles: CPUParticles2D
 var _orb: Sprite2D = null
+var _wave: Sprite2D = null
 
 
 static func cost_of(spell_kind: Kind) -> float:
@@ -78,6 +79,16 @@ func _ready() -> void:
 	_particles.color_ramp = ramp
 	add_child(_particles)
 
+	var wave_art := "res://art/%s_wave.png" % element
+	if kind == Kind.WAVE and ResourceLoader.exists(wave_art):
+		_wave = Sprite2D.new()
+		_wave.texture = load(wave_art)
+		var wmat := CanvasItemMaterial.new()
+		wmat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+		_wave.material = wmat
+		_wave.flip_h = direction < 0
+		_wave.scale = Vector2.ONE * (half_height * 2.3 / _wave.texture.get_height())
+		add_child(_wave)
 	var art := "res://art/%s_orb.png" % element
 	if kind == Kind.BOLT and ResourceLoader.exists(art):
 		_orb = Sprite2D.new()
@@ -100,6 +111,10 @@ func _process(delta: float) -> void:
 		var k := (0.6 + 0.4 * power) * (1.0 + 0.06 * sin(t * 25.0))
 		_orb.scale = Vector2.ONE * (radius * 5.0 / _orb.texture.get_height()) * k
 		_orb.rotation = sin(t * 9.0) * 0.08
+	if _wave != null:
+		var t2 := Time.get_ticks_msec() / 1000.0
+		var k2 := (0.7 + 0.3 * power) * (1.0 + 0.04 * sin(t2 * 13.0))
+		_wave.scale = Vector2(1.0 + 0.05 * sin(t2 * 21.0), 1.0) * (half_height * 2.3 / _wave.texture.get_height()) * k2
 	queue_redraw()
 
 
@@ -109,6 +124,8 @@ func extinguish() -> void:
 	alive = false
 	if _orb != null:
 		_orb.visible = false
+	if _wave != null:
+		_wave.visible = false
 	_particles.emitting = false
 	get_tree().create_timer(_particles.lifetime).timeout.connect(queue_free)
 	queue_redraw()
@@ -160,6 +177,16 @@ func _draw() -> void:
 		var half := deg_to_rad(70.0)
 		var r := half_height * (0.7 + 0.3 * power)
 		var center := Vector2(-direction * r * 0.6, 0.0)
+		if _wave != null:
+			# Art wave: only the travelling rune ticks on top of the sprite.
+			var ring1 := b
+			ring1.a = 0.7
+			var n1 := 12
+			for i in n1:
+				var a := mid - half + (i + fmod(t * 2.0, 1.0)) * (2.0 * half / n1)
+				var p0 := center + Vector2.from_angle(a) * (r * 0.95)
+				draw_line(p0, p0 + Vector2.from_angle(a) * 12.0, ring1, 2.0, true)
+			return
 		var outer := deep
 		outer.a = 0.18
 		draw_arc(center, r, mid - half, mid + half, 48, outer, 110.0, true)

@@ -36,6 +36,8 @@ var _arena_mat: ShaderMaterial
 var _shake := 0.0
 var _fire_energy := 0.0
 var _water_energy := 0.0
+var _dim: ColorRect
+var _flash: ColorRect
 
 # Debug: `godot --path game -- --screenshots=<dir>` saves the viewport every
 # SHOT_INTERVAL seconds for SHOT_COUNT shots, then quits.
@@ -59,6 +61,22 @@ func _ready() -> void:
 	_arena.material = _arena_mat
 	add_child(_arena)
 	move_child(_arena, 0)
+
+	# Dims the backdrop on the win screen (sits above the arena, below the wizards).
+	_dim = ColorRect.new()
+	_dim.size = Vector2(1920, 1080)
+	_dim.color = Color(0.02, 0.0, 0.06, 0.0)
+	_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_dim)
+	move_child(_dim, 1)
+	# Full-screen flash on the final blow (above everything).
+	_flash = ColorRect.new()
+	_flash.size = Vector2(1920, 1080)
+	_flash.color = Color(1, 1, 1, 0.0)
+	_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_flash)
+
+	_add_ambient_particles()
 
 	for w in [fire, water]:
 		w.mirror_x = MIRROR
@@ -87,6 +105,62 @@ func _run_screenshots() -> void:
 		var err := img.save_png(path)
 		print("screenshot %s (%s)" % [path, error_string(err)])
 	get_tree().quit()
+
+
+func _add_ambient_particles() -> void:
+	var embers := CPUParticles2D.new()
+	embers.amount = 90
+	embers.lifetime = 6.0
+	embers.preprocess = 6.0
+	embers.emission_shape = CPUParticles2D.EMISSION_SHAPE_RECTANGLE
+	embers.emission_rect_extents = Vector2(480, 80)
+	embers.position = Vector2(480, 1000)
+	embers.direction = Vector2(0.15, -1)
+	embers.spread = 25.0
+	embers.gravity = Vector2(0, -25)
+	embers.initial_velocity_min = 25.0
+	embers.initial_velocity_max = 90.0
+	embers.scale_amount_min = 1.5
+	embers.scale_amount_max = 4.0
+	embers.color = Color(1.0, 0.55, 0.15, 0.8)
+	var er := Gradient.new()
+	er.set_color(0, Color(1.0, 0.8, 0.3, 0.0))
+	er.add_point(0.15, Color(1.0, 0.6, 0.15, 0.9))
+	er.set_color(er.get_point_count() - 1, Color(0.8, 0.2, 0.05, 0.0))
+	embers.color_ramp = er
+	add_child(embers)
+	move_child(embers, 2)
+
+	var mist := CPUParticles2D.new()
+	mist.amount = 70
+	mist.lifetime = 7.0
+	mist.preprocess = 7.0
+	mist.emission_shape = CPUParticles2D.EMISSION_SHAPE_RECTANGLE
+	mist.emission_rect_extents = Vector2(480, 60)
+	mist.position = Vector2(1440, 120)
+	mist.direction = Vector2(-0.1, 1)
+	mist.spread = 20.0
+	mist.gravity = Vector2(0, 30)
+	mist.initial_velocity_min = 20.0
+	mist.initial_velocity_max = 70.0
+	mist.scale_amount_min = 1.5
+	mist.scale_amount_max = 3.5
+	var mr := Gradient.new()
+	mr.set_color(0, Color(0.7, 0.95, 1.0, 0.0))
+	mr.add_point(0.2, Color(0.5, 0.85, 1.0, 0.8))
+	mr.set_color(mr.get_point_count() - 1, Color(0.3, 0.6, 1.0, 0.0))
+	mist.color_ramp = mr
+	add_child(mist)
+	move_child(mist, 3)
+
+
+## Brief freeze, then slow motion, then back to normal. Real-time durations.
+func _hit_stop(freeze_s: float, slow_scale: float, slow_s: float) -> void:
+	Engine.time_scale = 0.02
+	await get_tree().create_timer(freeze_s, true, false, true).timeout
+	Engine.time_scale = slow_scale
+	await get_tree().create_timer(slow_s, true, false, true).timeout
+	Engine.time_scale = 1.0
 
 
 func _now() -> float:
@@ -175,6 +249,9 @@ func _start_countdown() -> void:
 	water.reset_round()
 	winner = null
 	restart_hold = 0.0
+	Engine.time_scale = 1.0
+	if _dim != null:
+		create_tween().tween_property(_dim, "color:a", 0.0, 0.4)
 	countdown = COUNTDOWN_SEC
 	state = State.COUNTDOWN
 	print("round: countdown")
@@ -187,6 +264,12 @@ func _on_died(w: Wizard) -> void:
 	winner.outcome = "win"
 	w.outcome = "lose"
 	state = State.OVER
+	_flash.color.a = 0.85
+	var tw := create_tween()
+	tw.tween_property(_flash, "color:a", 0.0, 0.5).set_ease(Tween.EASE_OUT)
+	var dim_tw := create_tween()
+	dim_tw.tween_property(_dim, "color:a", 0.45, 1.2)
+	_hit_stop(0.12, 0.25, 0.9)
 	print("round: over, %s wins" % winner.display_name())
 
 
@@ -309,6 +392,8 @@ func _resolve_clash(a: Spell, b: Spell) -> void:
 	_burst(mid, Color(1.0, 1.0, 1.0), 40)
 	FXRing.spawn(spells_root, mid, Color(0.9, 0.85, 1.0), 180.0, 0.4)
 	fire.fx.burst_shards(mid, Color(0.95, 0.9, 1.0), 300.0)
+	FXBurst.spawn(spells_root, mid, a.element, 260.0, Color(1, 1, 1, 0.8))
+	FXBurst.spawn(spells_root, mid, b.element, 260.0, Color(1, 1, 1, 0.8))
 	_shake = maxf(_shake, 4.0)
 
 
@@ -321,12 +406,16 @@ func _resolve_hit(s: Spell, target: Wizard) -> void:
 		_burst(s.position, target.color(), 30)
 		FXRing.spawn(spells_root, s.position, target.glow_color(), 220.0, 0.5)
 		target.fx.burst_shards(s.position, target.glow_color(), 360.0)
+		FXBurst.spawn(spells_root, s.position, s.element, 300.0, Color(1, 1, 1, 0.7))
 		_shake = maxf(_shake, 3.0)
 	else:
 		target.take_damage(s.damage * s.power)
 		_burst(s.position, s.color(), 60)
 		FXRing.spawn(spells_root, s.position, s.bright_color(), 300.0, 0.55)
 		target.fx.burst_shards(s.position, s.bright_color(), 420.0)
+		FXBurst.spawn(spells_root, s.position, s.element, 520.0 if s.kind == Spell.Kind.WAVE else 400.0)
+		if target.hp > 0.0:
+			_hit_stop(0.05, 0.6, 0.12)
 		FXRing.spawn(spells_root, Vector2(target.position.x, Wizard.GROUND_Y + 6.0), s.color(), 260.0, 0.6, 0.28)
 		_shake = maxf(_shake, 6.0 if s.kind == Spell.Kind.BOLT else 12.0)
 		print("%s hit by %s %s for %d (hp %d)" % [target.display_name(), s.element, "bolt" if s.kind == Spell.Kind.BOLT else "wave", s.damage * s.power, target.hp])
