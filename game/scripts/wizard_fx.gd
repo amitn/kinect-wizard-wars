@@ -10,6 +10,7 @@ const ROBE_SHADER := preload("res://shaders/robe.gdshader")
 const MASK_VP_SIZE := Vector2i(192, 480)
 
 static var _noise_tex: NoiseTexture2D = null
+static var _soft_tex: GradientTexture2D = null
 
 var element := "fire"
 var mirror_x := true
@@ -20,6 +21,9 @@ var _reflect: Sprite2D
 var _face: Node2D
 var _hand_l: CPUParticles2D
 var _hand_r: CPUParticles2D
+var _orb_sprites: Array = []      # two additive Sprite2D showing the orb art in the hands
+var _orb_tex: Texture2D = null
+var _shield_since := -10.0
 var _mask_vp: SubViewport
 var _mask_painter: Node2D
 var _white_tex: ImageTexture
@@ -47,6 +51,23 @@ var _shield_up := false
 var _facing := 1
 var _visible_body := false
 var _skeleton_joints: Dictionary = {}   # joint name -> local Vector2, for the mask painter
+
+
+## A soft radial dot for every particle system, instead of Godot's hard square point.
+static func soft_particle_texture() -> GradientTexture2D:
+	if _soft_tex == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.add_point(0.35, Color(1, 1, 1, 0.75))
+		g.set_color(g.get_point_count() - 1, Color(1, 1, 1, 0))
+		_soft_tex = GradientTexture2D.new()
+		_soft_tex.gradient = g
+		_soft_tex.fill = GradientTexture2D.FILL_RADIAL
+		_soft_tex.fill_from = Vector2(0.5, 0.5)
+		_soft_tex.fill_to = Vector2(0.5, 0.0)
+		_soft_tex.width = 32
+		_soft_tex.height = 32
+	return _soft_tex
 
 
 static func noise_texture() -> NoiseTexture2D:
@@ -108,6 +129,14 @@ func _ready() -> void:
 	_hand_r = _make_hand_particles()
 	add_child(_hand_l)
 	add_child(_hand_r)
+	for k in 2:
+		var sp := Sprite2D.new()
+		var mat := CanvasItemMaterial.new()
+		mat.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+		sp.material = mat
+		sp.visible = false
+		add_child(sp)
+		_orb_sprites.append(sp)
 
 	_face = Node2D.new()
 	_face.draw.connect(_draw_face)
@@ -142,6 +171,16 @@ func _load_art() -> void:
 		_barrier_tex = load(barrier)
 	if ResourceLoader.exists("res://art/shards.png"):
 		_shards_tex = load("res://art/shards.png")
+	var orb := "res://art/%s_orb.png" % element
+	if ResourceLoader.exists(orb):
+		_orb_tex = load(orb)
+		for sp in _orb_sprites:
+			sp.texture = _orb_tex
+			# Only the ball, not the trailing flames on the left of the orb art.
+			sp.region_enabled = true
+			var tw := _orb_tex.get_width()
+			var th := _orb_tex.get_height()
+			sp.region_rect = Rect2(tw * 0.52, th * 0.2, tw * 0.46, th * 0.6)
 
 
 func has_pose_art() -> bool:
@@ -182,8 +221,9 @@ func _make_hand_particles() -> CPUParticles2D:
 	p.spread = 40.0
 	p.initial_velocity_min = 40.0
 	p.initial_velocity_max = 120.0
-	p.scale_amount_min = 2.0
-	p.scale_amount_max = 6.0
+	p.scale_amount_min = 0.35
+	p.scale_amount_max = 0.9
+	p.texture = soft_particle_texture()
 	p.local_coords = false
 	return p
 
@@ -356,6 +396,24 @@ func update_look(silhouette: Image, sil_center: Vector2i, sil_rect: Rect2, joint
 	_hand_r.position = hand_right
 	_hand_l.emitting = bool(_hands_active[0])
 	_hand_r.emitting = bool(_hands_active[1])
+	if shield_up and _shield_since < 0.0:
+		_shield_since = Time.get_ticks_msec() / 1000.0
+		_on_shield_raised()
+	elif not shield_up:
+		_shield_since = -10.0
+	if _orb_tex != null:
+		var tnow := Time.get_ticks_msec() / 1000.0
+		for k in 2:
+			var sp: Sprite2D = _orb_sprites[k]
+			sp.visible = bool(_hands_active[k])
+			if not sp.visible:
+				continue
+			sp.position = _hand_pos[k]
+			var pulse := 1.0 + 0.08 * sin(tnow * 11.0 + k * 2.0) + (0.25 if shield_up else 0.0)
+			var target := 150.0 * pulse
+			sp.scale = Vector2.ONE * (target / sp.region_rect.size.y)
+			sp.rotation = tnow * (1.2 if k == 0 else -1.0)
+			sp.modulate = Color(1, 1, 1, 0.95)
 	_face.queue_redraw()
 	queue_redraw()
 
@@ -381,8 +439,21 @@ func burst_shards(at_global: Vector2, tint: Color, size: float = 320.0) -> void:
 	tw.chain().tween_callback(sp.queue_free)
 
 
+## The barrier forms: a burst and ring where it appears.
+func _on_shield_raised() -> void:
+	var h := _body_rect.size.y * 1.05
+	var w := h * (_barrier_tex.get_width() / float(_barrier_tex.get_height())) if _barrier_tex != null else 200.0
+	var bx := _body_rect.get_center().x + _facing * (_body_rect.size.x * 0.5 + w * 0.2)
+	var at := to_global(Vector2(bx, _feet_y - h * 0.5))
+	var root := get_tree().root
+	FXBurst.spawn(root, at, element, 520.0, Color(1, 1, 1, 0.9))
+	FXRing.spawn(root, at, glow_color(), 260.0, 0.45)
+
+
 func hide_body() -> void:
 	_visible_body = false
+	for sp in _orb_sprites:
+		sp.visible = false
 	_aura.visible = false
 	_body.visible = false
 	_reflect.visible = false
@@ -520,7 +591,7 @@ func _draw_face() -> void:
 	var t := Time.get_ticks_msec() / 1000.0
 	# Hands: spell orbs, a hot core inside a flickering ball and a slowly turning rune ring.
 	for k in 2:
-		if not _hands_active[k]:
+		if not _hands_active[k] or _orb_tex != null:
 			continue
 		var hp: Vector2 = _hand_pos[k]
 		var flicker := 1.0 + 0.12 * sin(t * 17.0 + k * 2.1) + 0.06 * sin(t * 29.0 + k)
@@ -575,9 +646,15 @@ func _draw_shield() -> void:
 		var tint := Color(1, 1, 1, 0.8 + 0.2 * pulse)
 		var glow := c
 		glow.a = 0.25 * pulse
+		# Forming: scale in from the centre over a quarter second with a bright flash.
+		var age := t - _shield_since
+		var form := clampf(age / 0.25, 0.0, 1.0)
+		form = 1.0 - pow(1.0 - form, 3.0)
+		tint = tint.lerp(Color(2.0, 2.0, 2.0, 1.0), (1.0 - form) * 0.8)
+		var cy := _feet_y - h * 0.5
 		# Mirror with a transform so the flipped copy stays centred on bx.
-		_face.draw_set_transform(Vector2(bx, 0.0), 0.0, Vector2(float(_facing), 1.0))
-		var rect := Rect2(Vector2(-w * 0.5, _feet_y - h), Vector2(w, h))
+		_face.draw_set_transform(Vector2(bx, cy), 0.0, Vector2(float(_facing) * form, form))
+		var rect := Rect2(Vector2(-w * 0.5, -h * 0.5), Vector2(w, h))
 		_face.draw_texture_rect(_barrier_tex, rect.grow(12.0), false, glow)
 		_face.draw_texture_rect(_barrier_tex, rect, false, tint)
 		_face.draw_set_transform(Vector2.ZERO)

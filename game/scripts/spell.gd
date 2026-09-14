@@ -69,8 +69,9 @@ func _ready() -> void:
 	_particles.gravity = Vector2(0.0, -120.0 if element == "fire" else 160.0)
 	_particles.initial_velocity_min = 120.0
 	_particles.initial_velocity_max = 260.0
-	_particles.scale_amount_min = 3.0
-	_particles.scale_amount_max = 9.0
+	_particles.scale_amount_min = 0.3
+	_particles.scale_amount_max = 0.9
+	_particles.texture = WizardFX.soft_particle_texture()
 	var ramp := Gradient.new()
 	ramp.set_color(0, bright_color())
 	var end := color()

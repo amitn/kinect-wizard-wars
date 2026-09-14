@@ -120,8 +120,9 @@ func _add_ambient_particles() -> void:
 	embers.gravity = Vector2(0, -25)
 	embers.initial_velocity_min = 25.0
 	embers.initial_velocity_max = 90.0
-	embers.scale_amount_min = 1.5
-	embers.scale_amount_max = 4.0
+	embers.scale_amount_min = 0.15
+	embers.scale_amount_max = 0.4
+	embers.texture = WizardFX.soft_particle_texture()
 	embers.color = Color(1.0, 0.55, 0.15, 0.8)
 	var er := Gradient.new()
 	er.set_color(0, Color(1.0, 0.8, 0.3, 0.0))
@@ -143,8 +144,9 @@ func _add_ambient_particles() -> void:
 	mist.gravity = Vector2(0, 30)
 	mist.initial_velocity_min = 20.0
 	mist.initial_velocity_max = 70.0
-	mist.scale_amount_min = 1.5
-	mist.scale_amount_max = 3.5
+	mist.scale_amount_min = 0.15
+	mist.scale_amount_max = 0.35
+	mist.texture = WizardFX.soft_particle_texture()
 	var mr := Gradient.new()
 	mr.set_color(0, Color(0.7, 0.95, 1.0, 0.0))
 	mr.add_point(0.2, Color(0.5, 0.85, 1.0, 0.8))
@@ -436,6 +438,9 @@ func _burst(at: Vector2, c: Color, amount: int) -> void:
 	p.scale_amount_min = 3.0
 	p.scale_amount_max = 8.0
 	p.color = c
+	p.texture = WizardFX.soft_particle_texture()
+	p.scale_amount_min = 0.3
+	p.scale_amount_max = 0.8
 	spells_root.add_child(p)
 	p.emitting = true
 	get_tree().create_timer(1.0).timeout.connect(p.queue_free)
