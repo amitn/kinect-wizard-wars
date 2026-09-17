@@ -76,7 +76,32 @@ Everything in `game/art/` is generated with an image model (the `gen-image-cli` 
 
 The game runs without any of these files: `WizardFX` falls back to a procedural robed silhouette, drawn shield disc and shader-only arena. Sprites face right; the water wizard is mirrored in code to face the fire wizard.
 
-## How tracking works
+## Body tracking (MediaPipe + depth)
+
+Skeletons come from MediaPipe Pose Landmarker running inside Godot through [GDMP](https://github.com/j20001970/GDMP) (`game/addons/GDMP`, prebuilt for Windows and Linux x86_64 and Linux arm64), fed with the Gemini 2 color image. Each of the 33 landmarks gets its depth from the Gemini depth image aligned to color (median of a 5x5 window, widened when empty, carried over briefly when missing, torso depth as the last resort) and is deprojected into camera space with the color intrinsics. MediaPipe's own z is never used as physical depth.
+
+The tracking layer in `game/tracking/` follows `NEW_INTEGRATION`:
+
+- `body_tracker.gd` (autoload `BodyTracker`): owns the camera and the pose processor; `players`, `get_player(i)`, signals `player_entered`, `player_left`, `tracking_started`, `tracking_lost`, `gesture(player, name)`.
+- `tracked_player.gd` / `tracked_joint.gd`: 33 joints with image, normalized and camera-space positions, visibility, velocity; convenience accessors `head`, `left_hand`, `right_hand`, feet; `is_crouching`, `is_jumping`, `arms_up`, `hands_together`.
+- `pose_filter.gd`: One Euro filter per joint. `player_identity_tracker.gd`: stable Player 1 / Player 2 ids by hips position. `gesture_detector.gd`: push, punch_left/right, swipe_left/right, arms_up, hands_together, jump, crouch from positions and velocities, all thresholds tunable.
+- `pose_processor.gd`: the GDMP live-stream pipeline plus depth fusion; stale frames are dropped rather than queued.
+
+Camera space is meters: +x right (image right), +y up, +z away from the camera. The game's `Tracking` source adapts BodyTracker players into the older Kinect-style body frames, so gameplay code is unchanged; the depth-blob tracker in the extension remains the fallback when GDMP is unavailable, and `--no-camera` keeps the UDP path.
+
+Press **T** in the game for `demo/body_tracking_demo.tscn`: the color image with skeletons, per-joint depth and XYZ, velocities, player ids, camera and inference rates.
+
+GDMP needs Godot 4.4 or newer; the project targets 4.4.1. The model file is `game/models/pose_landmarker_lite.task` (swap in the `full` or `heavy` variant for accuracy at a CPU cost).
+
+### Windows Smart App Control
+
+Windows on ARM PCs often ship with Smart App Control on, which blocks unsigned executables such as a freshly exported `WizardWars.exe` (the code-integrity log shows "did not meet the Enterprise signing level requirements"). Options: turn Smart App Control off in Windows Security (it cannot be turned back on without reinstalling Windows), sign the exe, or run the project through the signed official Godot editor binary:
+
+```
+Godot_v4.4.1-stable_win64_console.exe --path C:\path\to\game -- --tracklog
+```
+
+## How tracking works (fallback depth-blob tracker)
 
 `extension/src/body_tracker.cpp` does all of it on a 320x200 depth image:
 
