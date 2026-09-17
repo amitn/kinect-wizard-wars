@@ -193,12 +193,15 @@ func _fuse_and_emit(raw_people: Array, timestamp_ms: int) -> void:
 		root.z = torso_z
 		people.append({"root": root, "landmarks": landmarks, "timestamp_ms": timestamp_ms, "score": score})
 	# MediaPipe sometimes reports the same person twice; keep the better-seen one.
+	# Duplicates are found in image space (shoulder centre), where depth can't fool us.
 	people.sort_custom(func(a, b): return a["score"] > b["score"])
 	var kept: Array = []
 	for person in people:
+		var sc: Vector2 = (person["landmarks"][11]["normalized"] + person["landmarks"][12]["normalized"]) * 0.5
 		var dup := false
 		for other in kept:
-			if Vector2(person["root"].x, person["root"].z).distance_to(Vector2(other["root"].x, other["root"].z)) < 0.35:
+			var oc: Vector2 = (other["landmarks"][11]["normalized"] + other["landmarks"][12]["normalized"]) * 0.5
+			if sc.distance_to(oc) < 0.12:
 				dup = true
 				break
 		if not dup:

@@ -58,6 +58,8 @@ func _on_players_updated(players: Array) -> void:
 			var avg: Vector3 = sum / POSE_JOINTS[joint_name].size()
 			if joint_name == "Head":
 				avg.y += 0.10
+			elif joint_name == "SpineBase":
+				avg = p.position   # the tracker's root: torso depth, hips or shoulder-based
 			joints[joint_name] = [avg.x, avg.y, avg.z, 2 if tracked else 1]
 		bodies.append({"id": str(p.id), "hands": {"l": "tracked", "r": "tracked"},
 			"hands_up": p.arms_up, "height": p.standing_height, "joints": joints})
