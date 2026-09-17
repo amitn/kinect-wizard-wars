@@ -43,6 +43,14 @@ Elemental edges:
 
 Windows on ARM works too: the app and the SDK are x64 and run under emulation, and the camera needs no kernel driver.
 
+### Tips from real sessions
+
+- Stand 2 to 2.5 m from the camera, one player on each side. Closer than 1.5 m cuts the feet out of the picture and makes two players overlap; the tracker ignores anything closer than 1 m, farther than 3.6 m, or more than 1.8 m to the side.
+- Children work: bodies down to 0.85 m are tracked and gesture reach scales with height.
+- Press **D** for the tracker overlay: the camera's depth view with tinted blobs and markers (cyan centre, yellow head, red left hand, green right hand) plus per-body numbers.
+- Run `WizardWars.console.exe -- --tracklog` to print a body summary twice a second for tuning.
+- If the game says "No device found" on Windows, check that the camera is not attached to WSL (`usbipd.exe list`); `usbipd.exe detach --busid <id>` gives it back and the game reconnects by itself.
+
 ### Keyboard (works with or without a camera)
 
 | Key | Action |
@@ -52,6 +60,7 @@ Windows on ARM works too: the app and the SDK are x64 and run under emulation, a
 | Enter | Start a round even if nobody is tracked |
 | R | Restart the round |
 | B | Re-learn the empty-room background |
+| D | Tracker debug overlay with the camera view |
 | Esc | Quit |
 
 ## Art
