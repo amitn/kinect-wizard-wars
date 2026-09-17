@@ -201,7 +201,7 @@ func _anim_length(pose: String) -> float:
 func _frame_for(pose: String, now: float) -> Texture2D:
 	if pose != _anim_pose:
 		if trace_poses:
-			print("pose: %s -> %s (%s)" % [_anim_pose, pose, element])
+			print("pose: %s -> %s (%s) t=%.2f" % [_anim_pose, pose, element, now])
 		_anim_pose = pose
 		_anim_started = now
 	if _pose_frames.has(pose):

@@ -41,6 +41,8 @@ var _dim: ColorRect
 var _flash: ColorRect
 var _debug: DebugOverlay
 var _pose_gestures := false   # true when BodyTracker's gestures drive casting
+var _ko_after_fight := -1.0
+var _fight_time := 0.0
 
 # Debug: `godot --path game -- --screenshots=<dir>` saves the viewport every
 # SHOT_INTERVAL seconds for SHOT_COUNT shots, then quits.
@@ -110,6 +112,8 @@ func _ready() -> void:
 			_shot_interval = maxf(0.05, float(arg.get_slice("=", 1)))
 		elif arg.begins_with("--shot-delay="):
 			_shot_delay = maxf(0.0, float(arg.get_slice("=", 1)))
+		elif arg.begins_with("--ko-at="):
+			_ko_after_fight = float(arg.get_slice("=", 1))   # debug: KO the water wizard this long into the fight
 	if _shot_dir != "":
 		_run_screenshots()
 
@@ -240,9 +244,14 @@ func _process(delta: float) -> void:
 			countdown -= delta
 			if countdown <= 0.0:
 				state = State.FIGHT
+				_fight_time = 0.0
 				print("round: fight")
 		State.FIGHT:
 			_update_spells(delta)
+			_fight_time += delta
+			if _ko_after_fight >= 0.0 and _fight_time >= _ko_after_fight:
+				_ko_after_fight = -1.0
+				water.take_damage(999.0)
 		State.OVER:
 			_update_spells(delta)
 			if fire.gestures.shield_active and water.gestures.shield_active:
