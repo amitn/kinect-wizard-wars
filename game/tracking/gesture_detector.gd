@@ -15,6 +15,13 @@ var jump_speed := 1.2          # body root rising this fast
 
 var _last: Dictionary = {}     # "id:gesture" -> time
 var _swipe_hist: Dictionary = {}  # "id:side" -> Array of [t, x]
+var _streak: Dictionary = {}   # "id:state" -> consecutive updates the state held
+const STATE_PERSIST := 4       # updates a crouch/jump must hold before it counts
+
+
+func _held(key: String, cond: bool) -> bool:
+	_streak[key] = (int(_streak.get(key, 0)) + 1) if cond else 0
+	return int(_streak[key]) >= STATE_PERSIST
 
 
 func _cool(key: String, now: float, cooldown: float) -> bool:
@@ -49,7 +56,6 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		if hand.velocity.z < -push_speed * reach and forward > push_min_reach * reach:
 			if _cool("%d:punch_%s" % [p.id, side], now, punch_cooldown):
 				fired.append("punch_" + side)
-				fired.append("push")
 		# Swipe: sideways travel over the last 0.4 s at chest height, in front of the body.
 		var key := "%d:%s" % [p.id, side]
 		var hist: Array = _swipe_hist.get(key, [])
@@ -65,11 +71,13 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 				_swipe_hist[key] = []
 
 	# Crouch / jump from the body root.
-	if p.standing_height > 0.0:
+	var crouch_now := false
+	if p.standing_height > 0.0 and p.left_foot.valid and p.right_foot.valid:
 		var hips_above_feet := p.position.y - minf(p.left_foot.position_3d.y, p.right_foot.position_3d.y)
 		var standing_hips := p.standing_height * 0.5
-		p.is_crouching = hips_above_feet < standing_hips * crouch_ratio
-	p.is_jumping = p.velocity.y > jump_speed
+		crouch_now = hips_above_feet < standing_hips * crouch_ratio
+	p.is_crouching = _held("%d:crouch" % p.id, crouch_now)
+	p.is_jumping = _held("%d:jump" % p.id, p.velocity.y > jump_speed)
 	if p.is_jumping and _cool("%d:jump" % p.id, now, 0.8):
 		fired.append("jump")
 	if p.is_crouching and _cool("%d:crouch" % p.id, now, 0.8):

@@ -21,6 +21,12 @@ var min_tracking_confidence := 0.5
 var sample_radius := 2         # 5x5 median window, widened to 9x9 as a fallback
 var min_depth_m := 0.4
 var max_depth_m := 5.0
+var play_near_m := 0.8         # detections whose torso is outside this range are ignored
+var play_far_m := 3.6
+var min_score := 0.45          # mean landmark visibility below this = not a real person
+var arm_depth_limit_m := 0.8   # a limb can't be farther than this from the torso depth
+
+const NEAR_SURFACE_JOINTS := [13, 14, 15, 16, 17, 18, 19, 20, 21, 22]  # elbows, wrists, fingers
 
 var available := false
 var last_error := ""
@@ -125,7 +131,12 @@ func _fuse_and_emit(raw_people: Array, timestamp_ms: int) -> void:
 			var px := Vector2(r[0] * w, r[1] * h)
 			var depth: float = 0.0
 			if px.x >= 0 and px.y >= 0 and px.x < w and px.y < h:
-				depth = _camera.get_depth_at(int(px.x), int(px.y), sample_radius)
+				if j in NEAR_SURFACE_JOINTS:
+					# Arms stick out in front of the body; take the nearest surface in a wider
+					# window so a slightly-off landmark does not read the wall behind the hand.
+					depth = _camera.get_depth_percentile(int(px.x), int(px.y), sample_radius + 1, 0.25)
+				else:
+					depth = _camera.get_depth_at(int(px.x), int(px.y), sample_radius)
 				if depth <= 0.0:
 					depth = _camera.get_depth_at(int(px.x), int(px.y), sample_radius * 2)
 			if depth < min_depth_m or depth > max_depth_m:
@@ -138,12 +149,14 @@ func _fuse_and_emit(raw_people: Array, timestamp_ms: int) -> void:
 			continue
 		torso_depths.sort()
 		var torso_z: float = torso_depths[torso_depths.size() / 2]
+		if torso_z < play_near_m or torso_z > play_far_m:
+			continue   # outside the play area (or a phantom on the background)
 		# Second pass: fallbacks and deprojection.
 		for lm in landmarks:
 			var key := "%d:%d" % [pi, lm["index"]]
 			var depth: float = lm["depth"]
 			lm["depth_inferred"] = false
-			if depth > 0.0 and absf(depth - torso_z) > 1.2:
+			if depth > 0.0 and absf(depth - torso_z) > arm_depth_limit_m:
 				depth = 0.0   # a reading from the background behind a raised hand
 			if depth <= 0.0 and _last_depth.has(key) and now - _last_depth[key][1] < DEPTH_HOLD_S:
 				depth = _last_depth[key][0]
@@ -172,8 +185,13 @@ func _fuse_and_emit(raw_people: Array, timestamp_ms: int) -> void:
 		var vis_sum := 0.0
 		for lm in landmarks:
 			vis_sum += lm["visibility"]
-		people.append({"root": (lh + rh) * 0.5, "landmarks": landmarks, "timestamp_ms": timestamp_ms,
-			"score": vis_sum / landmarks.size()})
+		var score := vis_sum / landmarks.size()
+		if score < min_score:
+			continue
+		# The root's depth is the torso depth, which is far more stable than the hips' own reading.
+		var root: Vector3 = (lh + rh) * 0.5
+		root.z = torso_z
+		people.append({"root": root, "landmarks": landmarks, "timestamp_ms": timestamp_ms, "score": score})
 	# MediaPipe sometimes reports the same person twice; keep the better-seen one.
 	people.sort_custom(func(a, b): return a["score"] > b["score"])
 	var kept: Array = []

@@ -4,7 +4,7 @@ extends RefCounted
 ## remembered players by hips-centre distance. Crossing players may swap when
 ## they overlap for long; normal play stays stable.
 
-var max_match_distance := 0.7   # meters
+var max_match_distance := 1.0   # meters
 var memory_s := 1.5             # a player is kept this long without a detection
 
 var players: Dictionary = {}    # id -> TrackedPlayer

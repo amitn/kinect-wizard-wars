@@ -61,6 +61,9 @@ public:
 	double get_timestamp() const;
 	/// Median depth in meters in a (2*radius+1)^2 window of the aligned depth at a color pixel; 0 when unknown.
 	float get_depth_at(int x, int y, int radius) const;
+	/// Like get_depth_at but returns the given percentile (0..1) of the valid samples;
+	/// a low percentile favours the nearest surface, which is right for hands in front of a wall.
+	float get_depth_percentile(int x, int y, int radius, float percentile) const;
 	/// Camera-space point in meters for a color pixel and depth: +x right, +y up, +z away from the camera.
 	godot::Vector3 deproject_pixel(float x, float y, float depth_m) const;
 	/// Color intrinsics as [fx, fy, cx, cy] (aligned depth shares them).

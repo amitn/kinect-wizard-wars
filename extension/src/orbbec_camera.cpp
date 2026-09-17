@@ -85,6 +85,7 @@ void OrbbecCamera::_bind_methods() {
 	godot::ClassDB::bind_method(D_METHOD("get_color_frame_id"), &OrbbecCamera::get_color_frame_id);
 	godot::ClassDB::bind_method(D_METHOD("get_timestamp"), &OrbbecCamera::get_timestamp);
 	godot::ClassDB::bind_method(D_METHOD("get_depth_at", "x", "y", "radius"), &OrbbecCamera::get_depth_at);
+	godot::ClassDB::bind_method(D_METHOD("get_depth_percentile", "x", "y", "radius", "percentile"), &OrbbecCamera::get_depth_percentile);
 	godot::ClassDB::bind_method(D_METHOD("deproject_pixel", "x", "y", "depth_m"), &OrbbecCamera::deproject_pixel);
 	godot::ClassDB::bind_method(D_METHOD("get_intrinsics"), &OrbbecCamera::get_intrinsics);
 
@@ -297,6 +298,10 @@ int OrbbecCamera::get_color_frame_id() const { return color_frame_id; }
 double OrbbecCamera::get_timestamp() const { return color_ts_ms; }
 
 float OrbbecCamera::get_depth_at(int x, int y, int radius) const {
+	return get_depth_percentile(x, y, radius, 0.5f);
+}
+
+float OrbbecCamera::get_depth_percentile(int x, int y, int radius, float percentile) const {
 	std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(frame_mutex));
 	if (aligned_w == 0) {
 		return 0.0f;
@@ -318,8 +323,9 @@ float OrbbecCamera::get_depth_at(int x, int y, int radius) const {
 	if (samples.empty()) {
 		return 0.0f;
 	}
-	std::nth_element(samples.begin(), samples.begin() + samples.size() / 2, samples.end());
-	return samples[samples.size() / 2] / 1000.0f;
+	size_t k = static_cast<size_t>(std::max(0.0f, std::min(1.0f, percentile)) * (samples.size() - 1));
+	std::nth_element(samples.begin(), samples.begin() + k, samples.end());
+	return samples[k] / 1000.0f;
 }
 
 godot::Vector3 OrbbecCamera::deproject_pixel(float x, float y, float depth_m) const {
