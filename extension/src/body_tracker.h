@@ -42,8 +42,10 @@ struct TrackedBody {
 class BodyTracker {
 public:
 	struct Params {
-		float min_range_m = 0.5f;
+		float min_range_m = 1.0f;       // anything closer is junk near the lens
 		float max_range_m = 4.0f;
+		float min_height_m = 0.8f;      // a body must be at least this tall (seated adults pass)
+		double id_memory_s = 1.0;       // a vanished body keeps its id if it reappears within this
 		float bg_margin_m = 0.15f;      // closer than the background by this much = foreground
 		float link_max_dz_m = 0.20f;    // neighbouring pixels join a blob only if this close in depth
 		int min_area_px = 250;          // at the working resolution
@@ -79,6 +81,7 @@ private:
 		Vec3 hand_left, hand_right;
 		bool has_hands = false;
 		double last_seen = 0.0;
+		Vec3 last_centroid;
 	};
 
 	void update_background(const uint16_t *depth_mm);

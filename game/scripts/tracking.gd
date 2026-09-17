@@ -20,6 +20,8 @@ var source: String = "none"   # "camera", "udp" or "none"
 var _udp := PacketPeerUDP.new()
 var _camera: Node = null
 var _camera_retry_at := 0.0
+var _tracklog := false        # --tracklog: print a body summary twice a second
+var _tracklog_next := 0.0
 
 
 func _ready() -> void:
@@ -30,6 +32,9 @@ func _ready() -> void:
 	else:
 		print("Tracking: listening for bridge frames on UDP port %d" % port)
 
+	for arg in OS.get_cmdline_user_args():
+		if arg == "--tracklog":
+			_tracklog = true
 	if ClassDB.class_exists("OrbbecCamera"):
 		print("Tracking: OrbbecCamera extension loaded")
 		_camera = ClassDB.instantiate("OrbbecCamera")
@@ -143,3 +148,14 @@ func _on_raw_frame(raw_bodies: Array, from_source: String) -> void:
 			new_bodies.append(body)
 	bodies = new_bodies
 	frame_received.emit(bodies)
+	if _tracklog and last_packet_time >= _tracklog_next:
+		_tracklog_next = last_packet_time + 0.5
+		var parts: Array[String] = []
+		for b in bodies:
+			var base := b.joint("SpineBase")
+			var hl := b.joint("HandLeft") - b.joint("SpineShoulder")
+			var hr := b.joint("HandRight") - b.joint("SpineShoulder")
+			parts.append("id=%s h=%.2f x=%.2f z=%.2f L=(%.2f,%.2f,%.2f)%s R=(%.2f,%.2f,%.2f)%s%s" % [
+				b.id, b.height, base.x, base.z, hl.x, hl.y, hl.z, "*" if b.hand_left == "tracked" else "",
+				hr.x, hr.y, hr.z, "*" if b.hand_right == "tracked" else "", " UP" if b.hands_up else ""])
+		print("tracklog t=%.1f n=%d  %s" % [last_packet_time, bodies.size(), "  |  ".join(parts)])

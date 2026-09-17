@@ -189,15 +189,9 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 			max_runs = std::max(max_runs, runs);
 		}
 	}
-	b.hands_up = taller && max_runs >= 2;
-
 	const float head_y = b.bottom.y + 0.93f * baseline;
+	bool hands_up_shape = taller && max_runs >= 2;
 	b.spine_shoulder = { b.centroid.x, b.bottom.y + 0.80f * baseline, z_med };
-	if (b.hands_up) {
-		b.head = { b.centroid.x, head_y, z_med };
-	} else {
-		b.head = b.top;
-	}
 
 	// Hand candidates: above the waist and either sideways, in front, or above the head.
 	const float waist_y = b.centroid.y - 0.15f;
@@ -238,10 +232,18 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 	b.hand_right = found_r ? tip_right : rest_right;
 	b.hand_left_found = found_l;
 	b.hand_right_found = found_r;
+	// Hands up needs the silhouette shape and both hand tips above the head.
+	b.hands_up = hands_up_shape && found_l && found_r && b.hand_left.y > head_y + 0.05f && b.hand_right.y > head_y + 0.05f;
+	if (b.hands_up) {
+		b.head = { b.centroid.x, head_y, z_med };
+	} else {
+		b.head = b.top;
+	}
 	state.hand_left = b.hand_left;
 	state.hand_right = b.hand_right;
 	state.has_hands = true;
 	state.last_seen = time_s;
+	state.last_centroid = b.centroid;
 
 	// Silhouette mask for drawing.
 	b.bbox_x = umin;
@@ -267,17 +269,26 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 }
 
 void BodyTracker::assign_ids(std::vector<TrackedBody> &found, std::vector<const std::vector<int> *> &blob_refs, const uint16_t *depth_mm, double time_s) {
-	// Greedy nearest-centroid matching against the previous frame's bodies.
+	// Greedy nearest-centroid matching against remembered bodies (recent ones first).
 	std::vector<bool> used(found.size(), false);
 	std::vector<int> ids(found.size(), 0);
-	for (const TrackedBody &prev : current) {
+	std::vector<std::pair<double, int>> candidates;  // (-last_seen, id)
+	for (const auto &kv : states) {
+		if (time_s - kv.second.last_seen <= params.id_memory_s) {
+			candidates.push_back({ -kv.second.last_seen, kv.first });
+		}
+	}
+	std::sort(candidates.begin(), candidates.end());
+	std::vector<bool> id_taken;
+	for (const auto &cand : candidates) {
+		const BodyState &prev = states[cand.second];
 		int best = -1;
 		float best_d = params.match_max_dist_m;
 		for (size_t k = 0; k < found.size(); k++) {
 			if (used[k]) {
 				continue;
 			}
-			float d = dist3(found[k].centroid, prev.centroid);
+			float d = dist3(found[k].centroid, prev.last_centroid);
 			if (d < best_d) {
 				best_d = d;
 				best = static_cast<int>(k);
@@ -285,7 +296,7 @@ void BodyTracker::assign_ids(std::vector<TrackedBody> &found, std::vector<const 
 		}
 		if (best >= 0) {
 			used[best] = true;
-			ids[best] = prev.id;
+			ids[best] = cand.second;
 		}
 	}
 	for (size_t k = 0; k < found.size(); k++) {
@@ -300,7 +311,7 @@ void BodyTracker::assign_ids(std::vector<TrackedBody> &found, std::vector<const 
 		found[k].id = ids[k];
 	}
 	for (auto it = states.begin(); it != states.end();) {
-		if (time_s - it->second.last_seen > 2.0) {
+		if (time_s - it->second.last_seen > params.id_memory_s + 1.0) {
 			it = states.erase(it);
 		} else {
 			++it;
@@ -323,9 +334,24 @@ void BodyTracker::process(const uint16_t *depth_mm, double time_s) {
 
 	std::vector<const std::vector<int> *> chosen;
 	for (const auto &blob : blobs) {
-		if (!blob.empty()) {
-			chosen.push_back(&blob);
+		if (blob.empty()) {
+			continue;
 		}
+		// Physical height check: rows spanned times meters per pixel at the blob's depth.
+		int vmin = height, vmax = -1;
+		double zsum = 0.0;
+		for (int i : blob) {
+			int v = i / width;
+			vmin = std::min(vmin, v);
+			vmax = std::max(vmax, v);
+			zsum += depth_mm[i];
+		}
+		float z = static_cast<float>(zsum / blob.size()) / 1000.0f;
+		float phys_h = (vmax - vmin + 1) * z / fy;
+		if (phys_h < params.min_height_m) {
+			continue;
+		}
+		chosen.push_back(&blob);
 	}
 	std::sort(chosen.begin(), chosen.end(), [](const std::vector<int> *a, const std::vector<int> *b) { return a->size() > b->size(); });
 	if (static_cast<int>(chosen.size()) > params.max_bodies) {
