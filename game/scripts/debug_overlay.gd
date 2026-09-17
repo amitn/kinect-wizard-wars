@@ -1,12 +1,19 @@
 class_name DebugOverlay
 extends Control
-## Press D: shows every body the tracker reports, with silhouette, height, depth
-## and hand tips, so thresholds can be tuned against a real room.
+## Press D to cycle: off -> skeleton over the wizards -> skeleton + camera view + numbers.
 
-var enabled: bool = false:
+enum Mode { OFF, SKELETON, FULL }
+var mode: int = Mode.OFF:
 	set(v):
-		enabled = v
-		Tracking.set_camera_debug(v)
+		mode = v
+		Tracking.set_camera_debug(mode == Mode.FULL)
+var enabled: bool:
+	get: return mode != Mode.OFF
+	set(v): mode = Mode.FULL if v else Mode.OFF
+
+
+func cycle() -> void:
+	mode = (mode + 1) % 3
 var _cam_tex: ImageTexture = null
 var _color_tex: ImageTexture = null
 var _last_color_id := -1
@@ -33,10 +40,10 @@ func _draw() -> void:
 	if not enabled:
 		return
 	var font := ThemeDB.fallback_font
-	# Pose view: the color image with MediaPipe skeletons, bottom-left.
+	# Pose view: the color image with MediaPipe skeletons, bottom-left (full mode only).
 	var pose_drawn := false
 	var cam := BodyTracker.camera
-	if cam != null and cam.is_running() and BodyTracker.processor.available:
+	if mode == Mode.FULL and cam != null and cam.is_running() and BodyTracker.processor.available:
 		var fid: int = cam.get_color_frame_id()
 		if fid != _last_color_id:
 			_last_color_id = fid
@@ -91,6 +98,10 @@ func _draw() -> void:
 				var gp: Vector2 = w.to_global(w.joint_to_local(jn))
 				var rel: Vector3 = w.body.joint(jn) - w.body.joint("SpineShoulder")
 				draw_string(font, gp + Vector2(8, -6), "%s %.2f %.2f %.2f" % [jn, rel.x, rel.y, rel.z], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+
+	if mode == Mode.SKELETON:
+		draw_string(font, Vector2(24, 1040), "DEBUG: skeleton  (D again: camera view, then off)", HORIZONTAL_ALIGNMENT_LEFT, 800, 16, Color(0.7, 0.9, 1.0))
+		return
 
 	# Depth-blob view (fallback tracker) when there is no pose view.
 	var cam_img: Image = null if pose_drawn else Tracking.get_camera_debug_image()

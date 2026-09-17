@@ -5,7 +5,7 @@ extends Node2D
 ##   Fire wizard:  Q bolt   W wave   E toggle shield
 ##   Water wizard: I bolt   O wave   P toggle shield
 ##   Enter start a round with untracked players, R restart, B re-learn the empty room,
-##   D toggle the tracker debug overlay, T open the body tracking demo scene.
+##   D cycle the debug overlay (skeleton, skeleton + camera, off), T open the body tracking demo scene.
 
 enum State { WAITING, COUNTDOWN, FIGHT, OVER }
 
@@ -48,6 +48,8 @@ const SHOT_INTERVAL := 2.0
 const SHOT_COUNT := 10
 var _shot_dir := ""
 var _shot_count := SHOT_COUNT
+var _shot_interval := SHOT_INTERVAL
+var _shot_delay := 0.0
 
 
 func _ready() -> void:
@@ -102,14 +104,20 @@ func _ready() -> void:
 			_shot_dir = arg.get_slice("=", 1)
 		elif arg.begins_with("--shot-count="):
 			_shot_count = maxi(1, int(arg.get_slice("=", 1)))
+		elif arg.begins_with("--shot-interval="):
+			_shot_interval = maxf(0.05, float(arg.get_slice("=", 1)))
+		elif arg.begins_with("--shot-delay="):
+			_shot_delay = maxf(0.0, float(arg.get_slice("=", 1)))
 	if _shot_dir != "":
 		_run_screenshots()
 
 
 func _run_screenshots() -> void:
 	DirAccess.make_dir_recursive_absolute(_shot_dir)
+	if _shot_delay > 0.0:
+		await get_tree().create_timer(_shot_delay, true, false, true).timeout
 	for i in _shot_count:
-		await get_tree().create_timer(SHOT_INTERVAL).timeout
+		await get_tree().create_timer(_shot_interval, true, false, true).timeout
 		await RenderingServer.frame_post_draw
 		var img := get_viewport().get_texture().get_image()
 		var path := _shot_dir.path_join("shot_%02d.png" % i)
@@ -504,7 +512,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_B:
 			Tracking.learn_background()
 		KEY_D:
-			_debug.enabled = not _debug.enabled
+			_debug.cycle()
 		KEY_T:
 			get_tree().change_scene_to_file("res://demo/body_tracking_demo.tscn")
 		KEY_ESCAPE:
