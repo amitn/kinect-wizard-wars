@@ -40,6 +40,7 @@ var _water_energy := 0.0
 var _dim: ColorRect
 var _flash: ColorRect
 var _debug: DebugOverlay
+var _pose_gestures := false   # true when BodyTracker's gestures drive casting
 
 # Debug: `godot --path game -- --screenshots=<dir>` saves the viewport every
 # SHOT_INTERVAL seconds for SHOT_COUNT shots, then quits.
@@ -91,6 +92,10 @@ func _ready() -> void:
 		w.died.connect(_on_died.bind(w))
 	Tracking.frame_received.connect(_on_tracking_frame)
 	hud.setup(fire, water)
+	if BodyTracker.processor.available:
+		_pose_gestures = true
+		BodyTracker.gesture.connect(_on_pose_gesture)
+		print("gestures: MediaPipe layer (punch = bolt, swipe = wave)")
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--screenshots="):
@@ -313,11 +318,38 @@ func _update_hud() -> void:
 # -- Casting -----------------------------------------------------------------
 
 func _on_bolt(hand: String, w: Wizard) -> void:
+	if _pose_gestures:
+		return
 	_cast(Spell.Kind.BOLT, w, w.hand_global_position(hand))
 
 
 func _on_wave(hand: String, _direction: int, w: Wizard) -> void:
+	if _pose_gestures:
+		return
 	_cast(Spell.Kind.WAVE, w, w.hand_global_position(hand))
+
+
+func _wizard_for(player: TrackedPlayer) -> Wizard:
+	for w in [fire, water]:
+		if w.body_id == str(player.id):
+			return w
+	return null
+
+
+## Gestures from the BodyTracker layer. "left"/"right" there are the player's own
+## sides; the game's hand names are image sides, so they swap.
+func _on_pose_gesture(player: TrackedPlayer, gesture_name: String) -> void:
+	var w := _wizard_for(player)
+	if w == null:
+		return
+	print("gesture: %s %s" % [w.display_name(), gesture_name])
+	match gesture_name:
+		"punch_left":
+			_cast(Spell.Kind.BOLT, w, w.hand_global_position("right"))
+		"punch_right":
+			_cast(Spell.Kind.BOLT, w, w.hand_global_position("left"))
+		"swipe_left", "swipe_right":
+			_cast(Spell.Kind.WAVE, w, w.hand_global_position("right"))
 
 
 func _cast(kind: Spell.Kind, w: Wizard, origin: Vector2) -> void:
