@@ -47,7 +47,8 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.05, 0.05, 0.08))
 	var view := Rect2(Vector2(20, 60), Vector2(1280, 720))
 	if _tex != null:
-		draw_texture_rect(_tex, view, false)
+		# Mirrored, like the game.
+		draw_texture_rect(_tex, Rect2(view.position + Vector2(view.size.x, 0), Vector2(-view.size.x, view.size.y)), false)
 	else:
 		draw_rect(view, Color(0.1, 0.1, 0.14))
 		draw_string(font, view.position + Vector2(20, 40), "no color frames yet", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1, 0.6, 0.6))
@@ -62,7 +63,8 @@ func _draw() -> void:
 		var pts: Array = []
 		for name in TrackedPlayer.JOINT_NAMES:
 			var j: TrackedJoint = p.joints[name]
-			pts.append(view.position + j.image_position * scale)
+			var ip: Vector2 = j.image_position * scale
+			pts.append(view.position + Vector2(view.size.x - ip.x, ip.y))
 		for b in BONES:
 			var ja: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[0]]]
 			var jb: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[1]]]

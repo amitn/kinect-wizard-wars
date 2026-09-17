@@ -49,7 +49,8 @@ func _draw() -> void:
 		if _color_tex != null:
 			var pose_rect := Rect2(Vector2(20, 1080 - 400), Vector2(640, 360))
 			draw_rect(pose_rect.grow(4), Color(0, 0, 0, 0.7))
-			draw_texture_rect(_color_tex, pose_rect, false)
+			# Mirrored, like the game: draw the texture flipped and mirror the joint x.
+			draw_texture_rect(_color_tex, Rect2(pose_rect.position + Vector2(pose_rect.size.x, 0), Vector2(-pose_rect.size.x, pose_rect.size.y)), false)
 			var sc := pose_rect.size / Vector2(_color_tex.get_size())
 			for p in BodyTracker.players:
 				if not p.visible:
@@ -57,7 +58,8 @@ func _draw() -> void:
 				var col: Color = PLAYER_COLORS[(p.id - 1) % PLAYER_COLORS.size()]
 				var pts: Array = []
 				for jn in TrackedPlayer.JOINT_NAMES:
-					pts.append(pose_rect.position + p.joints[jn].image_position * sc)
+					var ip: Vector2 = p.joints[jn].image_position * sc
+					pts.append(pose_rect.position + Vector2(pose_rect.size.x - ip.x, ip.y))
 				for b in MP_BONES:
 					var ja: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[0]]]
 					var jb: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[1]]]
