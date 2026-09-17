@@ -81,6 +81,7 @@ func _ready() -> void:
 	_add_ambient_particles()
 	_debug = DebugOverlay.new()
 	_debug.size = Vector2(1920, 1080)
+	_debug.wizards = [fire, water]
 	add_child(_debug)
 
 	for w in [fire, water]:

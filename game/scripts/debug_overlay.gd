@@ -8,6 +8,15 @@ var enabled: bool = false:
 		enabled = v
 		Tracking.set_camera_debug(v)
 var _cam_tex: ImageTexture = null
+var _color_tex: ImageTexture = null
+var _last_color_id := -1
+var wizards: Array = []   # set by Main: the Wizard nodes, to draw the mapped joints over them
+
+const MP_BONES := [
+	[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24],
+	[23, 25], [25, 27], [24, 26], [26, 28], [27, 31], [28, 32], [15, 19], [16, 20], [0, 11], [0, 12],
+]
+const PLAYER_COLORS := [Color(1.0, 0.55, 0.15), Color(0.35, 0.7, 1.0), Color(0.6, 1.0, 0.5)]
 
 
 func _ready() -> void:
@@ -24,8 +33,65 @@ func _draw() -> void:
 	if not enabled:
 		return
 	var font := ThemeDB.fallback_font
-	# Camera view (depth + blobs + markers) bottom-left.
-	var cam_img := Tracking.get_camera_debug_image()
+	# Pose view: the color image with MediaPipe skeletons, bottom-left.
+	var pose_drawn := false
+	var cam := BodyTracker.camera
+	if cam != null and cam.is_running() and BodyTracker.processor.available:
+		var fid: int = cam.get_color_frame_id()
+		if fid != _last_color_id:
+			_last_color_id = fid
+			var img: Image = cam.get_color_image()
+			if img != null:
+				if _color_tex == null or _color_tex.get_size() != Vector2(img.get_size()):
+					_color_tex = ImageTexture.create_from_image(img)
+				else:
+					_color_tex.update(img)
+		if _color_tex != null:
+			var pose_rect := Rect2(Vector2(20, 1080 - 400), Vector2(640, 360))
+			draw_rect(pose_rect.grow(4), Color(0, 0, 0, 0.7))
+			draw_texture_rect(_color_tex, pose_rect, false)
+			var sc := pose_rect.size / Vector2(_color_tex.get_size())
+			for p in BodyTracker.players:
+				if not p.visible:
+					continue
+				var col: Color = PLAYER_COLORS[(p.id - 1) % PLAYER_COLORS.size()]
+				var pts: Array = []
+				for jn in TrackedPlayer.JOINT_NAMES:
+					pts.append(pose_rect.position + p.joints[jn].image_position * sc)
+				for b in MP_BONES:
+					var ja: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[0]]]
+					var jb: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[1]]]
+					draw_line(pts[b[0]], pts[b[1]], col if (ja.valid and jb.valid) else Color(col, 0.3), 2.0, true)
+				for i in pts.size():
+					var j: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[i]]
+					draw_circle(pts[i], 3.0, Color(1, 1, 0.3) if j.depth_inferred else (col if j.valid else Color(1, 0.3, 0.3)))
+				for i in [15, 16, 0]:
+					var j: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[i]]
+					draw_string(font, pts[i] + Vector2(5, -3), "z%.2f" % j.position_3d.z, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+				draw_string(font, pts[0] + Vector2(-30, -22), "P%d %.2f" % [p.id, p.tracking_confidence], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+			draw_rect(pose_rect, Color(0.6, 0.9, 1.0, 0.8), false, 2.0)
+			draw_string(font, pose_rect.position + Vector2(6, -6), "POSE  %.0f/s  %.0f ms   yellow = depth carried over, red = low confidence" % [BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms], HORIZONTAL_ALIGNMENT_LEFT, 640, 14, Color(0.8, 0.95, 1.0))
+			pose_drawn = true
+
+	# Mapped joints over the wizards in the arena: what the game actually uses.
+	for w in wizards:
+		if w == null or w.body == null:
+			continue
+		var wc: Color = w.color().lightened(0.4)
+		for bone in BodyData.BONES:
+			if w.body.has_joint(bone[0]) and w.body.has_joint(bone[1]):
+				draw_line(w.to_global(w.joint_to_local(bone[0])), w.to_global(w.joint_to_local(bone[1])), Color(wc, 0.85), 2.0, true)
+		for jn in w.body.joints.keys():
+			var gp: Vector2 = w.to_global(w.joint_to_local(jn))
+			draw_circle(gp, 4.0, wc)
+		for jn in ["HandLeft", "HandRight", "Head", "SpineShoulder"]:
+			if w.body.has_joint(jn):
+				var gp: Vector2 = w.to_global(w.joint_to_local(jn))
+				var rel: Vector3 = w.body.joint(jn) - w.body.joint("SpineShoulder")
+				draw_string(font, gp + Vector2(8, -6), "%s %.2f %.2f %.2f" % [jn, rel.x, rel.y, rel.z], HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+
+	# Depth-blob view (fallback tracker) when there is no pose view.
+	var cam_img: Image = null if pose_drawn else Tracking.get_camera_debug_image()
 	if cam_img != null:
 		if _cam_tex == null or _cam_tex.get_size() != Vector2(cam_img.get_size()):
 			_cam_tex = ImageTexture.create_from_image(cam_img)
