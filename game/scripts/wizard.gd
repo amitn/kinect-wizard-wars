@@ -10,8 +10,8 @@ signal died
 
 const MAX_HP := 100.0
 const MAX_MANA := 100.0
-const MANA_REGEN := 12.0        # per second
-const SHIELD_DRAIN := 20.0      # per second while the shield is up
+const MANA_REGEN := 16.0        # per second
+const SHIELD_DRAIN := 11.0      # per second while the shield is up
 const SHIELD_MIN_MANA := 10.0   # cannot raise a shield below this
 const PIXELS_PER_METER := 320.0
 const GROUND_Y := 940.0
