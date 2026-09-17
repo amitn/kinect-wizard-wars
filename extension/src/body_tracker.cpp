@@ -397,6 +397,9 @@ void BodyTracker::process(const uint16_t *depth_mm, double time_s) {
 		if (b.height_now < params.min_height_m) {
 			continue;
 		}
+		if (std::fabs(b.centroid.x) > params.max_lateral_m) {
+			continue;  // outside the play area, where the image edges are unreliable
+		}
 		if (states[b.id].frames_seen >= params.confirm_frames) {
 			current.push_back(std::move(b));
 		}

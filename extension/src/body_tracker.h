@@ -43,7 +43,8 @@ class BodyTracker {
 public:
 	struct Params {
 		float min_range_m = 1.0f;       // anything closer is junk near the lens
-		float max_range_m = 4.0f;
+		float max_range_m = 3.6f;       // play area depth; the depth image gets noisy beyond this
+		float max_lateral_m = 1.8f;     // play area half-width; the image edges are noisy too
 		float min_height_m = 1.0f;      // a body must be at least this tall (seated adults pass, furniture fails)
 		double id_memory_s = 1.0;       // a vanished body keeps its id if it reappears within this
 		int confirm_frames = 6;         // a new body is reported only after this many consecutive frames
