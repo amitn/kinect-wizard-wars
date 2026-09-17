@@ -77,7 +77,9 @@ void BodyTracker::find_blobs(const uint16_t *depth_mm, std::vector<std::vector<i
 				if (d > background[i]) {
 					background[i] = d;
 				}
-				bg_pending[i] = 0;
+				if (bg_pending[i] > 0) {
+					bg_pending[i]--;  // tolerate flicker: a farther reading only backs off one step
+				}
 			} else {
 				if (bg_pending[i] < 65535) {
 					bg_pending[i]++;
@@ -392,7 +394,7 @@ void BodyTracker::process(const uint16_t *depth_mm, double time_s) {
 	assign_ids(found, chosen, depth_mm, time_s);
 	current.clear();
 	for (TrackedBody &b : found) {
-		if (b.height_now < params.min_height_m * 0.8f) {
+		if (b.height_now < params.min_height_m) {
 			continue;
 		}
 		if (states[b.id].frames_seen >= params.confirm_frames) {

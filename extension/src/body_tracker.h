@@ -44,7 +44,7 @@ public:
 	struct Params {
 		float min_range_m = 1.0f;       // anything closer is junk near the lens
 		float max_range_m = 4.0f;
-		float min_height_m = 0.8f;      // a body must be at least this tall (seated adults pass)
+		float min_height_m = 1.0f;      // a body must be at least this tall (seated adults pass, furniture fails)
 		double id_memory_s = 1.0;       // a vanished body keeps its id if it reappears within this
 		int confirm_frames = 6;         // a new body is reported only after this many consecutive frames
 		float bg_margin_m = 0.15f;      // closer than the background by this much = foreground
