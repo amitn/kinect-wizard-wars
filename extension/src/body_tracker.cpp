@@ -88,7 +88,9 @@ void BodyTracker::find_blobs(const uint16_t *depth_mm, std::vector<std::vector<i
 				}
 			}
 		}
-		if (fg && bg_ready && background[i] != 0 && d + margin_mm >= background[i]) {
+		if (bg_ready && background[i] == 0) {
+			fg = false;  // first time this pixel has valid depth: it just became background
+		} else if (fg && bg_ready && d + margin_mm >= background[i]) {
 			fg = false;
 		}
 		foreground[i] = fg ? 1 : 0;
@@ -261,6 +263,10 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 	state.hand_left = b.hand_left;
 	state.hand_right = b.hand_right;
 	state.has_hands = true;
+	if (time_s - state.last_seen > 0.2) {
+		state.frames_seen = 0;  // a gap resets the confirmation count
+	}
+	state.frames_seen++;
 	state.last_seen = time_s;
 	state.last_centroid = b.centroid;
 
@@ -384,7 +390,15 @@ void BodyTracker::process(const uint16_t *depth_mm, double time_s) {
 		found.push_back(analyse(*blob, depth_mm, time_s, scratch));
 	}
 	assign_ids(found, chosen, depth_mm, time_s);
-	current = std::move(found);
+	current.clear();
+	for (TrackedBody &b : found) {
+		if (b.height_now < params.min_height_m * 0.8f) {
+			continue;
+		}
+		if (states[b.id].frames_seen >= params.confirm_frames) {
+			current.push_back(std::move(b));
+		}
+	}
 }
 
 } // namespace wizardwars

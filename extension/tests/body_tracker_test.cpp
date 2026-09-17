@@ -108,7 +108,7 @@ int main() {
 	Scene two;
 	two.person(-0.7f, 2.5f);
 	two.person(0.7f, 2.5f);
-	run_frames(t, two, time_s, 5);
+	run_frames(t, two, time_s, 8);
 	CHECK(t.bodies().size() == 2, "two people found");
 	if (t.bodies().size() == 2) {
 		const TrackedBody &a = t.bodies()[0].centroid.x < t.bodies()[1].centroid.x ? t.bodies()[0] : t.bodies()[1];
@@ -131,7 +131,7 @@ int main() {
 	Scene shield;
 	shield.person(-0.7f, 2.5f, true);
 	shield.person(0.7f, 2.5f);
-	run_frames(t, shield, time_s, 3);
+	run_frames(t, shield, time_s, 4);
 	{
 		const TrackedBody *left = nullptr;
 		for (const TrackedBody &b : t.bodies()) if (b.centroid.x < 0) left = &b;
@@ -148,7 +148,7 @@ int main() {
 	Scene punch;
 	punch.person(-0.7f, 2.5f, false, 0.6f);
 	punch.person(0.7f, 2.5f);
-	run_frames(t, punch, time_s, 3);
+	run_frames(t, punch, time_s, 4);
 	{
 		const TrackedBody *left = nullptr;
 		for (const TrackedBody &b : t.bodies()) if (b.centroid.x < 0) left = &b;
@@ -163,7 +163,7 @@ int main() {
 	Scene sweep;
 	sweep.person(-0.7f, 2.5f, false, 0.0f, 0.7f);
 	sweep.person(0.7f, 2.5f);
-	run_frames(t, sweep, time_s, 3);
+	run_frames(t, sweep, time_s, 4);
 	{
 		const TrackedBody *left = nullptr;
 		for (const TrackedBody &b : t.bodies()) if (b.centroid.x < 0) left = &b;
@@ -176,7 +176,7 @@ int main() {
 	// Person leaves: only one body remains, the other keeps its id.
 	Scene one;
 	one.person(0.7f, 2.5f);
-	run_frames(t, one, time_s, 3);
+	run_frames(t, one, time_s, 8);
 	CHECK(t.bodies().size() == 1, "one person after the other leaves");
 
 	std::printf("%s (%d failures)\n", failures == 0 ? "ALL PASSED" : "FAILED", failures);
