@@ -150,7 +150,11 @@ func learn_background() -> void:
 
 func source_description() -> String:
 	if has_camera() and _pose_mode:
-		return "Camera: %s  MediaPipe %.0f poses/s, %.0f ms (%d bodies)" % [_camera.get_device_name(), BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size()]
+		var warn := ""
+		for p in BodyTracker.players:
+			if p.visible and p.position.z > 0.0 and p.position.z < 1.2:
+				warn = "   TOO CLOSE: step back to 2 m so the whole body is in view"
+		return "Camera: %s  MediaPipe %.0f poses/s, %.0f ms (%d bodies)%s" % [_camera.get_device_name(), BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size(), warn]
 	if has_camera():
 		if not _camera.is_background_ready():
 			return "Camera: %s  -  learning the empty room, stay out of view" % _camera.get_device_name()

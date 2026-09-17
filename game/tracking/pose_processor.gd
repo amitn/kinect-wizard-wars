@@ -156,8 +156,19 @@ func _fuse_and_emit(raw_people: Array, timestamp_ms: int) -> void:
 				_last_depth[key] = [depth, now]
 			lm["depth_ok"] = true
 			lm["position_3d"] = _camera.deproject_pixel(lm["pixel"].x, lm["pixel"].y, depth)
+		# Body root: hips centre when the hips are inside the image with real depth,
+		# otherwise the shoulder centre lowered by a torso length (player too close).
+		var hips_ok := true
+		for hi in [23, 24]:
+			var n: Vector2 = landmarks[hi]["normalized"]
+			if n.x < 0.02 or n.x > 0.98 or n.y < 0.02 or n.y > 0.98 or landmarks[hi]["depth_inferred"]:
+				hips_ok = false
 		var lh: Vector3 = landmarks[23]["position_3d"]
 		var rh: Vector3 = landmarks[24]["position_3d"]
+		if not hips_ok:
+			var sc: Vector3 = (landmarks[11]["position_3d"] + landmarks[12]["position_3d"]) * 0.5
+			lh = sc + Vector3(0, -0.45, 0)
+			rh = lh
 		var vis_sum := 0.0
 		for lm in landmarks:
 			vis_sum += lm["visibility"]
