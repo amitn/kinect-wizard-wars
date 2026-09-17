@@ -142,7 +142,10 @@ func _update_player(p: TrackedPlayer, det: Dictionary, now: float) -> void:
 			if not was_valid:
 				f.reset()
 			var filtered := f.filter(raw, now)
-			j.velocity = (filtered - j.position_3d) / dt if was_valid else Vector3.ZERO
+			# Velocity from the raw samples (lightly smoothed) so fast punches are not damped away.
+			var raw_v := (raw - j.raw_position) / dt if was_valid else Vector3.ZERO
+			j.velocity = j.velocity.lerp(raw_v, 0.6) if was_valid else Vector3.ZERO
+			j.raw_position = raw
 			j.position_3d = filtered
 		else:
 			# Never leave a joint at the origin: keep its last position, or follow the root.
@@ -168,3 +171,8 @@ func _update_player(p: TrackedPlayer, det: Dictionary, now: float) -> void:
 			var sorted := p.height_samples.duplicate()
 			sorted.sort()
 			p.standing_height = sorted[sorted.size() / 2]
+	elif p.standing_height == 0.0 and p.head.valid and p.joints["left_hip"].valid:
+		# Feet out of view (player close): estimate from head-to-hips, refined once feet appear.
+		var torso := p.head.position_3d.y - p.position.y
+		if torso > 0.3 and torso < 1.2:
+			p.standing_height = torso * 1.9

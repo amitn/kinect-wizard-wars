@@ -3,8 +3,10 @@ extends RefCounted
 ## Deterministic gestures from joint positions and velocities. All thresholds
 ## are tunable; distances in meters, speeds in meters per second.
 
-var push_speed := 1.6          # hand moving toward the camera (negative z velocity)
-var push_min_reach := 0.30     # hand must end up this far in front of the shoulders
+var push_speed := 1.2          # hand moving toward the camera (negative z velocity)
+var push_min_reach := 0.22     # hand must end up this far in front of the shoulders
+var push_travel := 0.22        # or: hand came this much closer to the camera within push_window
+var push_window := 0.35
 var punch_cooldown := 0.5
 var swipe_speed := 1.8         # sideways hand speed
 var swipe_min_travel := 0.45   # meters within the window
@@ -15,6 +17,7 @@ var jump_speed := 1.2          # body root rising this fast
 
 var _last: Dictionary = {}     # "id:gesture" -> time
 var _swipe_hist: Dictionary = {}  # "id:side" -> Array of [t, x]
+var _push_hist: Dictionary = {}   # "id:side" -> Array of [t, forward]
 var _streak: Dictionary = {}   # "id:state" -> consecutive updates the state held
 const STATE_PERSIST := 4       # updates a crouch/jump must hold before it counts
 
@@ -53,9 +56,21 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		if not hand.valid:
 			continue
 		var forward := shoulders.z - hand.position_3d.z
-		if hand.velocity.z < -push_speed * reach and forward > push_min_reach * reach:
+		# Push: fast forward velocity, or a clear forward travel inside a short window
+		# (robust against the smoothing filter damping the velocity).
+		var pkey := "%d:%s" % [p.id, side]
+		var phist: Array = _push_hist.get(pkey, [])
+		phist.append([now, forward])
+		while phist.size() > 0 and now - phist[0][0] > push_window:
+			phist.pop_front()
+		_push_hist[pkey] = phist
+		var travel: float = forward - phist[0][1] if phist.size() > 1 else 0.0
+		var fast := hand.velocity.z < -push_speed * reach
+		var travelled := travel > push_travel * reach
+		if (fast or travelled) and forward > push_min_reach * reach:
 			if _cool("%d:punch_%s" % [p.id, side], now, punch_cooldown):
 				fired.append("punch_" + side)
+				_push_hist[pkey] = []
 		# Swipe: sideways travel over the last 0.4 s at chest height, in front of the body.
 		var key := "%d:%s" % [p.id, side]
 		var hist: Array = _swipe_hist.get(key, [])

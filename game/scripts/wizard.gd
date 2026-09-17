@@ -16,7 +16,7 @@ const SHIELD_MIN_MANA := 10.0   # cannot raise a shield below this
 const PIXELS_PER_METER := 320.0
 const GROUND_Y := 940.0
 const BODY_TIMEOUT := 1.5       # seconds without a frame before the player counts as lost
-const FOLLOW_RANGE := 380.0     # how far (px) the wizard may wander from its lane centre
+const FOLLOW_RANGE := 220.0     # how far (px) the wizard may wander from its lane centre
 const FOLLOW_SMOOTH := 0.25     # per-frame lerp toward the player's position
 
 var hp := MAX_HP
@@ -29,6 +29,7 @@ var gestures := GestureRecognizer.new()
 
 var _hit_flash := 0.0
 var _cast_flash := 0.0
+var _follow_ref_x := INF   # camera x where this player was first seen; lane centre maps to it
 var fx: WizardFX
 var outcome := ""   # "", "win" or "lose" once the round is decided
 var _origin := Vector2(0.0, GROUND_Y - 0.9 * PIXELS_PER_METER)
@@ -76,6 +77,7 @@ func set_body(new_body: BodyData, now: float) -> void:
 func clear_body() -> void:
 	body = null
 	body_id = ""
+	_follow_ref_x = INF
 	gestures.reset()
 	queue_redraw()
 
@@ -212,10 +214,13 @@ func _update_origin() -> void:
 	var base := body.joint("SpineBase")
 	var foot_drop := base.y - minf(body.joint("FootLeft").y, body.joint("FootRight").y)
 	foot_drop = clampf(foot_drop, 0.6, 1.2)
-	# Follow the player sideways: camera x (mirrored) mapped to the screen, kept
-	# inside this wizard's half of the arena, smoothed so tracking jitter stays hidden.
-	var screen_x := 960.0 + base.x * PIXELS_PER_METER * (-1.0 if mirror_x else 1.0)
-	var target_local_x := clampf(screen_x - position.x, -FOLLOW_RANGE, FOLLOW_RANGE)
+	# Follow the player sideways: the spot where the player was first seen is the
+	# lane centre; stepping left or right moves the wizard the same way (mirrored),
+	# kept inside this wizard's half of the arena and smoothed against jitter.
+	var cam_x := base.x * (-1.0 if mirror_x else 1.0)
+	if _follow_ref_x == INF:
+		_follow_ref_x = cam_x
+	var target_local_x := clampf((cam_x - _follow_ref_x) * PIXELS_PER_METER * 0.6, -FOLLOW_RANGE, FOLLOW_RANGE)
 	var new_x := lerpf(_origin.x, target_local_x, FOLLOW_SMOOTH)
 	_origin = Vector2(new_x, GROUND_Y - foot_drop * PIXELS_PER_METER)
 	# Stepping closer makes the wizard a little larger.

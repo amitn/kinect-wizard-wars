@@ -100,6 +100,8 @@ func _ready() -> void:
 		print("gestures: MediaPipe layer (punch = bolt, swipe = wave)")
 
 	for arg in OS.get_cmdline_user_args():
+		if arg == "--tracklog":
+			WizardFX.trace_poses = true
 		if arg.begins_with("--screenshots="):
 			_shot_dir = arg.get_slice("=", 1)
 		elif arg.begins_with("--shot-count="):

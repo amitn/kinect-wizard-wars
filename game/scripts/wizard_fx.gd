@@ -10,6 +10,7 @@ const ROBE_SHADER := preload("res://shaders/robe.gdshader")
 const MASK_VP_SIZE := Vector2i(192, 480)
 
 static var _noise_tex: NoiseTexture2D = null
+static var trace_poses := false   # print pose changes (set by --tracklog)
 static var _soft_tex: GradientTexture2D = null
 
 var element := "fire"
@@ -199,6 +200,8 @@ func _anim_length(pose: String) -> float:
 ## One-shot animations hold their last frame once finished.
 func _frame_for(pose: String, now: float) -> Texture2D:
 	if pose != _anim_pose:
+		if trace_poses:
+			print("pose: %s -> %s (%s)" % [_anim_pose, pose, element])
 		_anim_pose = pose
 		_anim_started = now
 	if _pose_frames.has(pose):

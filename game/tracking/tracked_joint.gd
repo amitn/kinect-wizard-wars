@@ -11,6 +11,7 @@ var name: String = ""
 var normalized_position := Vector2.ZERO
 var image_position := Vector2.ZERO
 var position_3d := Vector3.ZERO
+var raw_position := Vector3.ZERO  # unfiltered camera-space position
 var velocity := Vector3.ZERO      # meters per second, filtered
 var visibility := 0.0
 var confidence := 0.0
