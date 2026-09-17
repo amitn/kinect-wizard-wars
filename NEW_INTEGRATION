@@ -1,0 +1,1449 @@
+# Gemini 2 Body Tracking in Godot
+
+## Goal
+
+Implement robust real-time body tracking in Godot using:
+
+- Godot 4.x
+- Orbbec Gemini 2
+- Orbbec SDK v2
+- MediaPipe Pose Landmarker
+- GDMP for MediaPipe integration with Godot
+- Gemini 2 depth data for accurate 3D joint positions
+
+The final system must expose clean, game-oriented body tracking data to GDScript.
+
+The game code should not need to know anything about MediaPipe, Orbbec SDK, image alignment, camera intrinsics, or depth sampling.
+
+The desired high-level API should look approximately like:
+
+```gdscript
+var player := BodyTracker.get_player(0)
+
+var hand := player.right_hand
+
+print(hand.position_3d)
+print(hand.velocity)
+print(hand.confidence)
+
+if player.is_crouching:
+    pass
+
+if player.gestures.has("push"):
+    cast_spell()
+```
+
+Do not build the actual game yet.
+
+Build the reusable tracking layer first.
+
+---
+
+# 1. Architecture
+
+Use this architecture:
+
+```text
+                 Orbbec Gemini 2
+                       │
+               Orbbec SDK v2
+                       │
+             synchronized FrameSet
+                ┌──────┴───────┐
+                │              │
+              RGB            Depth
+                │              │
+                │        D2C alignment
+                │              │
+                ▼              │
+       MediaPipe Pose          │
+          Landmarker           │
+                │              │
+          33 landmarks         │
+            in RGB XY          │
+                │              │
+                └──────┬───────┘
+                       │
+               sample depth
+              around each joint
+                       │
+               camera intrinsics
+                       │
+                 deprojection
+                       │
+                       ▼
+                true XYZ joints
+                       │
+                   smoothing
+                       │
+                  player IDs
+                       │
+                  velocities
+                       │
+                       ▼
+                  BodyTracker
+                       │
+             ┌─────────┼──────────┐
+             ▼         ▼          ▼
+          gestures   game      particles/VFX
+```
+
+Important:
+
+**Do not use MediaPipe's Z coordinate as the authoritative physical depth.**
+
+Use MediaPipe primarily for joint detection in image space.
+
+Use the Gemini 2 depth sensor to obtain physical Z and deproject the joints into camera-space XYZ coordinates.
+
+---
+
+# 2. Dependencies
+
+Use the following components.
+
+## Godot
+
+Target current Godot 4.x.
+
+Do not target Godot 3.
+
+## MediaPipe
+
+Use MediaPipe Pose Landmarker.
+
+Pose Landmarker supports:
+
+- 33 pose landmarks
+- multiple poses
+- live-stream processing
+- tracking confidence
+- optional segmentation masks
+
+Configure initially for:
+
+```text
+num_poses = 2
+min_pose_detection_confidence = 0.5
+min_pose_presence_confidence = 0.5
+min_tracking_confidence = 0.5
+```
+
+Expose these values as project settings later rather than hard-coding them permanently.
+
+## GDMP
+
+Use:
+
+https://github.com/j20001970/GDMP
+
+GDMP exposes MediaPipe functionality to Godot, including:
+
+```text
+MediaPipePoseLandmarker
+MediaPipeHandLandmarker
+MediaPipeGestureRecognizer
+MediaPipeImage
+```
+
+Use Pose Landmarker first.
+
+Do not add Hand Landmarker until basic body tracking works.
+
+Note that GDMP's old `MediaPipeCameraHelper` is being deprecated.
+
+Therefore, **do not architect the project around MediaPipeCameraHelper**.
+
+Our RGB frames should ultimately originate from the Gemini 2/Orbbec camera integration.
+
+## Orbbec
+
+Use:
+
+https://github.com/orbbec/OrbbecSDK_v2
+
+Do not use the obsolete Astra/OpenNI Godot plugins.
+
+Gemini 2 is supported by Orbbec SDK v2 and SDK v2 is the preferred API for new designs.
+
+---
+
+# 3. Repository Structure
+
+Aim for approximately this structure:
+
+```text
+project/
+├── addons/
+│   ├── gdmp/
+│   │
+│   └── orbbec_gemini/
+│       ├── bin/
+│       ├── src/
+│       │   ├── gemini_camera.cpp
+│       │   ├── gemini_camera.hpp
+│       │   ├── register_types.cpp
+│       │   └── register_types.hpp
+│       └── orbbec_gemini.gdextension
+│
+├── tracking/
+│   ├── body_tracker.gd
+│   ├── tracked_player.gd
+│   ├── tracked_joint.gd
+│   ├── pose_processor.gd
+│   ├── player_identity_tracker.gd
+│   ├── pose_filter.gd
+│   └── gesture_detector.gd
+│
+├── demo/
+│   ├── body_tracking_demo.tscn
+│   └── body_tracking_demo.gd
+│
+└── project.godot
+```
+
+Keep Orbbec-specific implementation separated from body-tracking/game code.
+
+---
+
+# 4. Build the Orbbec Godot Interface
+
+Create a small C++ GDExtension around Orbbec SDK v2.
+
+Use the official `godot-cpp` GDExtension mechanism rather than modifying Godot itself.
+
+The extension should expose a Godot class such as:
+
+```text
+GeminiCamera
+```
+
+Minimum API:
+
+```gdscript
+GeminiCamera.start()
+GeminiCamera.stop()
+
+GeminiCamera.is_running()
+
+GeminiCamera.get_color_image()
+GeminiCamera.get_depth_image()
+
+GeminiCamera.get_color_width()
+GeminiCamera.get_color_height()
+
+GeminiCamera.get_depth_width()
+GeminiCamera.get_depth_height()
+
+GeminiCamera.get_depth_at(x, y)
+
+GeminiCamera.deproject_pixel(x, y, depth)
+
+GeminiCamera.get_timestamp()
+```
+
+Later we may add:
+
+```gdscript
+GeminiCamera.get_point_cloud()
+GeminiCamera.get_intrinsics()
+GeminiCamera.get_device_info()
+```
+
+Do not expose raw Orbbec SDK objects directly to GDScript.
+
+Wrap them behind simple Godot types.
+
+---
+
+# 5. Camera Configuration
+
+Start with a stable, modest configuration.
+
+Target approximately:
+
+```text
+RGB:   1280x720 or nearest stable mode
+Depth: compatible D2C resolution
+FPS:   30
+```
+
+Do not optimize resolution prematurely.
+
+The primary target is:
+
+```text
+stable 30 FPS tracking
+```
+
+Enable RGB/depth synchronization when supported.
+
+Enable **Depth-to-Color alignment (D2C)**.
+
+The critical requirement is:
+
+```text
+depth[x, y]
+```
+
+must correspond to the same physical image location as:
+
+```text
+rgb[x, y]
+```
+
+after alignment.
+
+Without this, joint depth lookup will be wrong.
+
+---
+
+# 6. First Milestone: Display Gemini Streams in Godot
+
+Before implementing MediaPipe, create a demo scene showing:
+
+```text
+left side:  RGB
+right side: depth visualization
+```
+
+Display:
+
+- camera FPS
+- RGB resolution
+- depth resolution
+- device name
+- connection status
+
+Acceptance criteria:
+
+1. Gemini 2 opens successfully.
+2. RGB stream appears.
+3. Depth stream appears.
+4. Camera runs for at least 10 minutes without leaking memory or crashing.
+5. Disconnect/reconnect failure is handled gracefully.
+
+Do not continue to pose tracking until this works.
+
+---
+
+# 7. Feed Gemini RGB Into MediaPipe
+
+Convert the Gemini RGB frame into a format accepted by GDMP/MediaPipe.
+
+Conceptually:
+
+```text
+Orbbec RGB buffer
+      ↓
+Godot Image
+      ↓
+MediaPipeImage
+      ↓
+MediaPipePoseLandmarker
+```
+
+Avoid unnecessary image copies where practical, but correctness comes before zero-copy optimization.
+
+Measure the cost before trying to optimize it.
+
+The pose processing pipeline should run asynchronously if GDMP's API supports it cleanly.
+
+Do not block Godot's render loop waiting for inference.
+
+---
+
+# 8. Pose Landmarker Output
+
+For each detected person, extract all 33 landmarks.
+
+Create a stable enum/mapping for the MediaPipe joints.
+
+At minimum expose:
+
+```text
+nose
+
+left_eye
+right_eye
+left_ear
+right_ear
+
+left_shoulder
+right_shoulder
+
+left_elbow
+right_elbow
+
+left_wrist
+right_wrist
+
+left_hip
+right_hip
+
+left_knee
+right_knee
+
+left_ankle
+right_ankle
+
+left_heel
+right_heel
+
+left_foot_index
+right_foot_index
+```
+
+Keep all 33 internally even if the game only uses a subset.
+
+Each joint should contain something similar to:
+
+```gdscript
+class_name TrackedJoint
+
+var image_position: Vector2
+var normalized_position: Vector2
+
+var position_3d: Vector3
+
+var visibility: float
+var confidence: float
+
+var velocity: Vector3
+var valid: bool
+```
+
+---
+
+# 9. Gemini Depth Fusion
+
+This is one of the most important parts of the project.
+
+MediaPipe returns normalized image coordinates approximately like:
+
+```text
+x = 0.73
+y = 0.41
+```
+
+Convert these to pixels in the **aligned RGB/depth frame**:
+
+```gdscript
+var px = int(landmark.x * image_width)
+var py = int(landmark.y * image_height)
+```
+
+Do not simply sample:
+
+```text
+depth[px, py]
+```
+
+from one pixel.
+
+Depth pixels can occasionally be invalid or noisy.
+
+Instead sample a region around the joint.
+
+Start with:
+
+```text
+5x5
+```
+
+or:
+
+```text
+7x7
+```
+
+pixels.
+
+Discard:
+
+```text
+0
+invalid
+out-of-range
+```
+
+depth samples.
+
+Use the median of the remaining samples.
+
+Example conceptual implementation:
+
+```gdscript
+func sample_joint_depth(x: int, y: int) -> float:
+    var samples := []
+
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            var d = camera.get_depth_at(x + dx, y + dy)
+
+            if d > 0:
+                samples.append(d)
+
+    if samples.is_empty():
+        return NAN
+
+    samples.sort()
+
+    return samples[samples.size() / 2]
+```
+
+Move performance-sensitive depth sampling into C++ later if necessary.
+
+---
+
+# 10. Deprojection
+
+Once there is a valid:
+
+```text
+pixel X
+pixel Y
+depth Z
+```
+
+convert it into real camera-space coordinates using Gemini camera calibration/intrinsics.
+
+Conceptually:
+
+```text
+(u, v, depth)
+       ↓
+camera intrinsics
+       ↓
+(X, Y, Z)
+```
+
+Expose this through:
+
+```gdscript
+GeminiCamera.deproject_pixel(x, y, depth)
+```
+
+The returned position should have well-defined units.
+
+Prefer:
+
+```text
+meters
+```
+
+inside the Godot-facing tracking API.
+
+Document the coordinate system explicitly.
+
+For example:
+
+```text
++X = camera right
++Y = camera down/up depending on conversion
++Z = away from camera
+```
+
+Convert it once into a Godot-friendly convention.
+
+Do not leave axis conversions scattered through game code.
+
+---
+
+# 11. Missing Depth Handling
+
+Depth samples will sometimes be unavailable.
+
+Do not make joints instantly disappear.
+
+Use this fallback order:
+
+```text
+1. median local depth sample
+2. slightly larger sample window
+3. previous valid depth for a very short period
+4. mark joint depth invalid
+```
+
+Do not silently substitute MediaPipe's inferred Z coordinate as though it were camera depth.
+
+It can optionally be used as a last-resort relative signal, but flag it as inferred.
+
+---
+
+# 12. Filtering / Smoothing
+
+Raw pose landmarks jitter.
+
+Implement temporal filtering.
+
+Start with either:
+
+```text
+EMA
+```
+
+or preferably:
+
+```text
+One Euro Filter
+```
+
+Filter XYZ coordinates independently.
+
+The filter should balance:
+
+```text
+low jitter when stationary
++
+low latency during fast movement
+```
+
+Do not apply extremely heavy smoothing.
+
+This is for games.
+
+A hand moving quickly to cast a spell must feel responsive.
+
+Expose tuning parameters.
+
+---
+
+# 13. Joint Velocity
+
+Calculate velocity for each valid joint:
+
+```text
+velocity =
+    (current_position - previous_position)
+    / delta_time
+```
+
+Smooth velocity separately if necessary.
+
+Expose:
+
+```gdscript
+joint.velocity
+```
+
+in:
+
+```text
+meters/second
+```
+
+This will eventually allow gestures such as:
+
+```text
+punch
+push
+throw
+swipe
+jump
+```
+
+without needing a separate machine-learning gesture model.
+
+---
+
+# 14. Player Model
+
+Create:
+
+```gdscript
+class_name TrackedPlayer
+```
+
+Suggested structure:
+
+```gdscript
+var id: int
+
+var joints: Dictionary
+
+var position: Vector3
+var velocity: Vector3
+
+var tracking_confidence: float
+var visible: bool
+
+var is_crouching: bool
+var is_jumping: bool
+
+var gestures: Dictionary
+```
+
+Convenience properties should exist:
+
+```gdscript
+player.left_hand
+player.right_hand
+
+player.left_elbow
+player.right_elbow
+
+player.head
+
+player.left_foot
+player.right_foot
+```
+
+Do not force every game to know MediaPipe landmark indices.
+
+---
+
+# 15. Persistent Player IDs
+
+MediaPipe detections should not be assumed to maintain permanent player identity.
+
+For two-player games, implement your own identity tracker.
+
+Start simple.
+
+Calculate each person's body center from something like:
+
+```text
+midpoint(left_hip, right_hip)
+```
+
+Match new detections against previous players based on nearest body-center location.
+
+Use a sensible maximum movement distance.
+
+Maintain:
+
+```text
+Player 1
+Player 2
+```
+
+even when MediaPipe returns detections in a different order.
+
+Later improve identity matching using:
+
+```text
+position
+velocity
+body dimensions
+tracking history
+```
+
+Do not use face recognition.
+
+---
+
+# 16. Crossing Players
+
+Test explicitly:
+
+```text
+Player A starts left
+Player B starts right
+
+A walks past B
+
+A ends on right
+B ends on left
+```
+
+Their IDs should ideally remain stable.
+
+If perfect crossing behavior becomes disproportionately complicated, prioritize:
+
+```text
+stable normal gameplay
+```
+
+over sophisticated re-identification.
+
+Document limitations.
+
+---
+
+# 17. Body Center
+
+Calculate a useful body root.
+
+Prefer something like:
+
+```text
+hips_center =
+    (left_hip + right_hip) / 2
+```
+
+Optionally calculate:
+
+```text
+shoulder_center
+torso_center
+```
+
+Expose:
+
+```gdscript
+player.position
+```
+
+as the chosen body root.
+
+---
+
+# 18. Derived Body State
+
+Add basic derived states after 3D tracking works.
+
+## Crouch
+
+Compare:
+
+```text
+hip height
+knee angle
+torso height
+```
+
+against the person's standing baseline.
+
+## Jump
+
+Detect upward body-root velocity and both feet leaving their recent floor level.
+
+Do not rely on a single-frame threshold.
+
+## Arms up
+
+For example:
+
+```text
+both wrists above shoulders/head
+```
+
+## Hands together
+
+Use true 3D distance:
+
+```gdscript
+left_hand.position_3d.distance_to(
+    right_hand.position_3d
+)
+```
+
+This is better than comparing only screen-space positions.
+
+---
+
+# 19. Basic Gesture Layer
+
+Do not add a complicated neural gesture system initially.
+
+Implement deterministic gestures using positions and velocities.
+
+Initial gestures:
+
+```text
+hands_together
+arms_up
+push
+punch_left
+punch_right
+swipe_left
+swipe_right
+jump
+crouch
+```
+
+For example:
+
+```text
+push:
+    hand moves rapidly toward the camera
+    while starting reasonably close to torso
+```
+
+Potential rule:
+
+```text
+hand forward velocity exceeds threshold
++
+motion lasts at least N milliseconds
++
+cooldown since previous trigger
+```
+
+All thresholds should be configurable.
+
+---
+
+# 20. Coordinate Spaces
+
+Be explicit about coordinate spaces.
+
+Maintain separate values for:
+
+```text
+normalized image space
+pixel image space
+camera 3D space
+game/world space
+```
+
+Do not mix them.
+
+For example:
+
+```text
+landmark.normalized_position
+landmark.pixel_position
+landmark.camera_position
+landmark.world_position
+```
+
+Implement a separate transform for:
+
+```text
+camera space → game space
+```
+
+This will be important when the camera is mounted above/below/behind a TV or projector.
+
+---
+
+# 21. Tracking Manager API
+
+Provide a global `BodyTracker`.
+
+For example:
+
+```gdscript
+BodyTracker.player_count
+
+BodyTracker.get_player(id)
+
+BodyTracker.players
+```
+
+Signals:
+
+```gdscript
+signal player_entered(player)
+signal player_left(player)
+
+signal tracking_started()
+signal tracking_lost()
+
+signal gesture(player, gesture_name)
+```
+
+Example gameplay code should be as simple as:
+
+```gdscript
+func _on_body_tracker_gesture(player, gesture):
+    if gesture == "push":
+        spawn_fireball(player.right_hand.position_3d)
+```
+
+---
+
+# 22. Debug Overlay
+
+Build a proper debugging view.
+
+Show:
+
+- RGB camera image
+- detected MediaPipe skeleton
+- joint numbers/names
+- player ID
+- tracking confidence
+- depth at joint
+- calculated XYZ
+- joint velocity
+- FPS
+- inference time
+- camera frame age
+
+Use different skeleton display for Player 1 and Player 2.
+
+Also provide a 3D debug view showing the camera-space skeleton.
+
+This will save a huge amount of development time.
+
+---
+
+# 23. Performance Metrics
+
+Record:
+
+```text
+camera FPS
+pose inference FPS
+render FPS
+camera → pose latency
+pose processing time
+depth fusion time
+total tracking latency
+```
+
+Do not merely report FPS.
+
+Latency matters more for this game.
+
+Target:
+
+```text
+camera: ~30 FPS
+pose updates: ideally 20–30 FPS
+render: 60 FPS if possible
+```
+
+Avoid doing expensive MediaPipe inference multiple times for the same frame.
+
+---
+
+# 24. Threading
+
+Camera capture and MediaPipe inference should not unnecessarily block Godot's rendering thread.
+
+Preferred conceptual architecture:
+
+```text
+camera capture thread
+        ↓
+latest RGB/depth FrameSet
+        ↓
+pose worker / asynchronous inference
+        ↓
+latest tracking state
+        ↓
+Godot main thread
+```
+
+Prefer dropping stale frames to building a queue of old frames.
+
+For real-time interaction:
+
+```text
+fresh frame > every frame
+```
+
+Do not let latency continuously increase under load.
+
+---
+
+# 25. Memory
+
+Be careful with:
+
+```text
+RGB Image allocations
+depth Image allocations
+MediaPipeImage allocation
+Orbbec frame references
+```
+
+Avoid allocating huge image buffers every frame where possible.
+
+First make the system correct.
+
+Then profile.
+
+Only optimize allocations after measuring them.
+
+---
+
+# 26. Failure Handling
+
+Handle:
+
+```text
+camera missing at startup
+camera disconnected
+camera reconnected
+invalid depth
+MediaPipe model missing
+no players detected
+one player leaves
+second player enters
+```
+
+The application should not crash in these cases.
+
+Expose useful errors in Godot's output.
+
+---
+
+# 27. First Working Demo
+
+Create:
+
+```text
+demo/body_tracking_demo.tscn
+```
+
+The demo should show:
+
+```text
+                 Player 1
+
+                   HEAD
+                    ●
+                  /   \
+                 ●     ●
+                 |     |
+                 ●     ●
+                  \   /
+                   ●
+                  / \
+                 ●   ●
+                 |   |
+                 ●   ●
+```
+
+Render the joints using their true Gemini-derived XYZ coordinates.
+
+Show Player 1 and Player 2 simultaneously.
+
+Also display values such as:
+
+```text
+P1 right hand:
+X: 0.42 m
+Y: 0.18 m
+Z: 2.14 m
+
+velocity:
+1.31 m/s
+```
+
+---
+
+# 28. Testing
+
+Implement at least these manual scenarios.
+
+### Test 1 — standing still
+
+One person stands approximately 2 metres from the camera.
+
+Verify:
+
+- skeleton stable
+- depth approximately correct
+- low jitter
+
+### Test 2 — hand forward
+
+Move right hand toward camera.
+
+Verify:
+
+```text
+Z changes substantially
+```
+
+while torso depth remains relatively stable.
+
+This proves Gemini depth fusion is working.
+
+### Test 3 — sideways movement
+
+Walk left/right.
+
+Verify X changes correctly.
+
+### Test 4 — crouch
+
+Verify hip/knee positions respond correctly.
+
+### Test 5 — jump
+
+Verify body-root vertical velocity.
+
+### Test 6 — two players
+
+Both people visible simultaneously.
+
+Verify two skeletons.
+
+### Test 7 — player crossing
+
+Walk past one another.
+
+Inspect whether IDs remain stable.
+
+### Test 8 — occlusion
+
+Hide one hand behind the torso.
+
+The tracker should degrade gracefully instead of producing wild XYZ coordinates.
+
+---
+
+# 29. Calibration
+
+Eventually support a calibration mode.
+
+The user should be able to specify the physical play area:
+
+```text
+left
+right
+floor
+maximum depth
+```
+
+Example:
+
+```text
+play width: 3.5 m
+near plane: 1.0 m
+far plane: 4.0 m
+```
+
+Map that camera volume to normalized game coordinates:
+
+```text
+X = -1 ... +1
+Y =  0 ... +1
+Z =  0 ... +1
+```
+
+Do not make games depend directly on the room's exact dimensions.
+
+---
+
+# 30. Optional Gemini Silhouette
+
+After pose tracking works, add a second output from the Gemini depth stream:
+
+```text
+player_mask
+```
+
+Use depth thresholding:
+
+```text
+near_depth < depth < far_depth
+```
+
+to isolate players.
+
+This can later be used for:
+
+```text
+particle collisions
+magic aura
+fire silhouettes
+water effects
+body shadows
+interactive smoke
+```
+
+This mask is separate from skeletal tracking.
+
+It may ultimately be more useful than the skeleton for some visual effects.
+
+---
+
+# 31. Do Not Implement Yet
+
+Do not initially add:
+
+- face recognition
+- cloud APIs
+- external tracking services
+- complicated ML gesture classifiers
+- networking
+- VR
+- avatar IK
+- point-cloud rendering
+- recording
+- hand/finger tracking
+- gameplay
+- fancy VFX
+
+First get:
+
+```text
+Gemini RGB
++
+Gemini aligned depth
++
+MediaPipe joints
++
+true XYZ joints
++
+2 stable player identities
+```
+
+working reliably.
+
+---
+
+# 32. Implementation Order
+
+Follow this order strictly unless a dependency forces a change.
+
+## Phase 1
+
+Install and validate Orbbec SDK v2 outside Godot.
+
+Confirm Gemini 2 works using OrbbecViewer/example programs.
+
+## Phase 2
+
+Create the Orbbec GDExtension.
+
+Get RGB displaying inside Godot.
+
+## Phase 3
+
+Display aligned depth in Godot.
+
+Verify RGB/depth registration visually.
+
+## Phase 4
+
+Install GDMP.
+
+Run its Pose Landmarker demo independently.
+
+## Phase 5
+
+Feed the Gemini RGB image into Pose Landmarker.
+
+Draw the 2D skeleton over the Gemini RGB image.
+
+## Phase 6
+
+Fuse Gemini depth into each joint.
+
+Display depth beside every joint.
+
+## Phase 7
+
+Deproject joints to XYZ.
+
+Display the skeleton in Godot 3D.
+
+## Phase 8
+
+Implement temporal filtering.
+
+## Phase 9
+
+Implement persistent Player 1 / Player 2 identity.
+
+## Phase 10
+
+Calculate joint velocity.
+
+## Phase 11
+
+Add basic gestures.
+
+Only after Phase 11 should game development begin.
+
+---
+
+# 33. Definition of Done
+
+The body-tracking module is complete when:
+
+- Gemini 2 opens automatically.
+- RGB and aligned depth are available in Godot.
+- MediaPipe Pose Landmarker detects up to two people.
+- All 33 MediaPipe joints are available.
+- Visible joints receive real Gemini-derived depth.
+- Joints are converted into real XYZ coordinates.
+- XYZ units are documented and consistent.
+- Tracking jitter is filtered.
+- Joint velocity is available.
+- Two players receive reasonably persistent IDs.
+- Tracking continues without blocking rendering.
+- Player enter/leave events work.
+- Camera disconnect does not crash Godot.
+- A debug scene displays the complete tracking state.
+- A normal gameplay script can use tracking without knowing about Orbbec or MediaPipe.
+
+Target game-side usage:
+
+```gdscript
+func _process(_delta):
+    var player = BodyTracker.get_player(0)
+
+    if player == null:
+        return
+
+    var hand = player.right_hand
+
+    $MagicOrb.global_position = camera_to_game(
+        hand.position_3d
+    )
+```
+
+and:
+
+```gdscript
+func _on_gesture(player, gesture):
+    match gesture:
+        "push":
+            cast_fireball(player)
+        "arms_up":
+            activate_special(player)
+        "crouch":
+            raise_shield(player)
+```
+
+That is the abstraction level the final tracking system should provide.
+
+---
+
+# 34. Important Engineering Rules
+
+1. **Use Gemini depth as the authoritative physical Z coordinate.**
+
+2. Do not treat MediaPipe's model-derived Z as equivalent to measured camera depth.
+
+3. Align depth and RGB before looking up depth at pose landmarks.
+
+4. Prefer median neighbourhood depth sampling instead of one-pixel sampling.
+
+5. Keep camera SDK code out of gameplay code.
+
+6. Keep MediaPipe landmark indices out of gameplay code.
+
+7. Always distinguish camera coordinates from game/world coordinates.
+
+8. Prefer low latency over processing every frame.
+
+9. Drop stale frames rather than queueing them.
+
+10. Profile before optimizing.
+
+11. Keep a debug visualization available throughout development.
+
+12. Commit after every working phase.
+
+---
+
+# References
+
+Orbbec SDK v2:
+
+https://github.com/orbbec/OrbbecSDK_v2
+
+GDMP:
+
+https://github.com/j20001970/GDMP
+
+MediaPipe Pose Landmarker documentation:
+
+https://developers.google.com/mediapipe/solutions/vision/pose_landmarker
+
+Godot C++ GDExtension template:
+
+https://github.com/godotengine/godot-cpp-template
+
+Do not rely solely on README snippets. Inspect the current APIs and examples in these projects before implementing their integration because GDMP, MediaPipe and Orbbec SDK APIs evolve.

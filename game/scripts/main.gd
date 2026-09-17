@@ -5,7 +5,7 @@ extends Node2D
 ##   Fire wizard:  Q bolt   W wave   E toggle shield
 ##   Water wizard: I bolt   O wave   P toggle shield
 ##   Enter start a round with untracked players, R restart, B re-learn the empty room,
-##   D toggle the tracker debug overlay.
+##   D toggle the tracker debug overlay, T open the body tracking demo scene.
 
 enum State { WAITING, COUNTDOWN, FIGHT, OVER }
 
@@ -472,6 +472,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			Tracking.learn_background()
 		KEY_D:
 			_debug.enabled = not _debug.enabled
+		KEY_T:
+			get_tree().change_scene_to_file("res://demo/body_tracking_demo.tscn")
 		KEY_ESCAPE:
 			get_tree().quit()
 

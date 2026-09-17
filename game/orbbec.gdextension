@@ -6,11 +6,11 @@ reloadable = false
 
 [libraries]
 
-windows.debug.x86_64 = "res://bin/windows/liborbbecwizard.windows.template_debug.x86_64.dll"
+windows.debug.x86_64 = "res://bin/windows/liborbbecwizard.windows.template_release.x86_64.dll"
 windows.release.x86_64 = "res://bin/windows/liborbbecwizard.windows.template_release.x86_64.dll"
-linux.debug.x86_64 = "res://bin/linux/liborbbecwizard.linux.template_debug.x86_64.so"
+linux.debug.x86_64 = "res://bin/linux/liborbbecwizard.linux.template_release.x86_64.so"
 linux.release.x86_64 = "res://bin/linux/liborbbecwizard.linux.template_release.x86_64.so"
-linux.debug.arm64 = "res://bin/linux/liborbbecwizard.linux.template_debug.arm64.so"
+linux.debug.arm64 = "res://bin/linux/liborbbecwizard.linux.template_release.arm64.so"
 linux.release.arm64 = "res://bin/linux/liborbbecwizard.linux.template_release.arm64.so"
 
 [dependencies]

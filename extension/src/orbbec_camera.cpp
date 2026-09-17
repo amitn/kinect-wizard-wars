@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -78,6 +79,14 @@ void OrbbecCamera::_bind_methods() {
 	godot::ClassDB::bind_method(D_METHOD("get_depth_height"), &OrbbecCamera::get_depth_height);
 	godot::ClassDB::bind_method(D_METHOD("set_debug_enabled", "enabled"), &OrbbecCamera::set_debug_enabled);
 	godot::ClassDB::bind_method(D_METHOD("get_debug_image"), &OrbbecCamera::get_debug_image);
+	godot::ClassDB::bind_method(D_METHOD("get_color_image"), &OrbbecCamera::get_color_image);
+	godot::ClassDB::bind_method(D_METHOD("get_color_width"), &OrbbecCamera::get_color_width);
+	godot::ClassDB::bind_method(D_METHOD("get_color_height"), &OrbbecCamera::get_color_height);
+	godot::ClassDB::bind_method(D_METHOD("get_color_frame_id"), &OrbbecCamera::get_color_frame_id);
+	godot::ClassDB::bind_method(D_METHOD("get_timestamp"), &OrbbecCamera::get_timestamp);
+	godot::ClassDB::bind_method(D_METHOD("get_depth_at", "x", "y", "radius"), &OrbbecCamera::get_depth_at);
+	godot::ClassDB::bind_method(D_METHOD("deproject_pixel", "x", "y", "depth_m"), &OrbbecCamera::deproject_pixel);
+	godot::ClassDB::bind_method(D_METHOD("get_intrinsics"), &OrbbecCamera::get_intrinsics);
 
 	ADD_SIGNAL(godot::MethodInfo("frame_received", godot::PropertyInfo(godot::Variant::ARRAY, "bodies")));
 }
@@ -106,25 +115,31 @@ bool OrbbecCamera::start() {
 		}
 
 		std::shared_ptr<ob::Config> config = std::make_shared<ob::Config>();
-		config->setFrameAggregateOutputMode(OB_FRAME_AGGREGATE_OUTPUT_ANY_SITUATION);
+		config->setFrameAggregateOutputMode(OB_FRAME_AGGREGATE_OUTPUT_ALL_TYPE_FRAME_REQUIRE);
 		try {
 			config->enableVideoStream(OB_STREAM_DEPTH, 640, 400, 30, OB_FORMAT_Y16);
 		} catch (const ob::Error &) {
 			config->enableVideoStream(OB_STREAM_DEPTH);
 		}
+		color_enabled = true;
+		try {
+			config->enableVideoStream(OB_STREAM_COLOR, 1280, 720, 30, OB_FORMAT_RGB);
+		} catch (const ob::Error &) {
+			try {
+				config->enableVideoStream(OB_STREAM_COLOR, 0, 0, 30, OB_FORMAT_RGB);
+			} catch (const ob::Error &) {
+				color_enabled = false;
+				config->setFrameAggregateOutputMode(OB_FRAME_AGGREGATE_OUTPUT_ANY_SITUATION);
+			}
+		}
+		if (color_enabled) {
+			align = std::make_shared<ob::Align>(OB_STREAM_COLOR);
+		}
 
 		pipeline->start(config, [this](std::shared_ptr<ob::FrameSet> frames) {
-			if (!frames) {
-				return;
+			if (frames) {
+				on_frameset(frames);
 			}
-			std::shared_ptr<ob::DepthFrame> depth = frames->getDepthFrame();
-			if (!depth) {
-				return;
-			}
-			std::shared_ptr<ob::VideoStreamProfile> profile = depth->getStreamProfile()->as<ob::VideoStreamProfile>();
-			OBCameraIntrinsic in = profile->getIntrinsic();
-			on_depth(reinterpret_cast<const uint16_t *>(depth->getData()), depth->getWidth(), depth->getHeight(),
-					depth->getValueScale(), in.fx, in.fy, in.cx, in.cy, depth->getTimeStampUs());
 		});
 		running = true;
 		godot::UtilityFunctions::print("OrbbecCamera: streaming depth from ", device_name);
@@ -140,6 +155,7 @@ bool OrbbecCamera::start() {
 }
 
 void OrbbecCamera::stop() {
+	align.reset();
 	if (pipeline) {
 		try {
 			pipeline->stop();
@@ -181,6 +197,145 @@ int OrbbecCamera::get_depth_width() const {
 
 int OrbbecCamera::get_depth_height() const {
 	return source_h;
+}
+
+// Runs on the SDK's thread. Depth alone feeds the blob tracker; with color the
+// depth is aligned to the color image and both are kept for pose estimation.
+void OrbbecCamera::on_frameset(std::shared_ptr<ob::FrameSet> frames) {
+	std::shared_ptr<ob::DepthFrame> depth = frames->getDepthFrame();
+	std::shared_ptr<ob::ColorFrame> color = frames->getColorFrame();
+	if (!depth) {
+		return;
+	}
+	if (color_enabled && color && align) {
+		try {
+			std::shared_ptr<ob::Frame> aligned = align->process(frames);
+			std::shared_ptr<ob::FrameSet> aset = aligned ? aligned->as<ob::FrameSet>() : nullptr;
+			std::shared_ptr<ob::DepthFrame> adepth = aset ? aset->getDepthFrame() : nullptr;
+			if (adepth) {
+				std::shared_ptr<ob::VideoStreamProfile> cprof = color->getStreamProfile()->as<ob::VideoStreamProfile>();
+				OBCameraIntrinsic cin = cprof->getIntrinsic();
+				const int w = adepth->getWidth(), h = adepth->getHeight();
+				const float scale = adepth->getValueScale();
+				const uint16_t *src = reinterpret_cast<const uint16_t *>(adepth->getData());
+				{
+					std::lock_guard<std::mutex> lock(frame_mutex);
+					aligned_depth_mm.resize(w * h);
+					for (int i = 0; i < w * h; i++) {
+						float mm = src[i] * scale;
+						aligned_depth_mm[i] = mm > 65535.0f ? 0 : static_cast<uint16_t>(mm);
+					}
+					aligned_w = w;
+					aligned_h = h;
+					col_fx = cin.fx;
+					col_fy = cin.fy;
+					col_cx = cin.cx;
+					col_cy = cin.cy;
+					if (color->getFormat() == OB_FORMAT_RGB) {
+						const int cw = color->getWidth(), ch = color->getHeight();
+						const uint8_t *cdata = static_cast<const uint8_t *>(color->getData());
+						color_rgb.assign(cdata, cdata + cw * ch * 3);
+						color_w = cw;
+						color_h = ch;
+						color_frame_id++;
+						color_ts_ms = color->getTimeStampUs() / 1000.0;
+					}
+				}
+				// The blob tracker keeps working on the aligned depth (downsampled 4x).
+				const int ds = 4;
+				std::vector<uint16_t> small((w / ds) * (h / ds));
+				for (int v = 0; v < h / ds; v++) {
+					for (int u = 0; u < w / ds; u++) {
+						float mm = src[(v * ds + ds / 2) * w + u * ds + ds / 2] * scale;
+						small[v * (w / ds) + u] = mm > 65535.0f ? 0 : static_cast<uint16_t>(mm);
+					}
+				}
+				std::lock_guard<std::mutex> lock(frame_mutex);
+				latest_depth = std::move(small);
+				latest_w = w / ds;
+				latest_h = h / ds;
+				source_w = w;
+				source_h = h;
+				latest_fx = cin.fx / ds;
+				latest_fy = cin.fy / ds;
+				latest_cx = cin.cx / ds;
+				latest_cy = cin.cy / ds;
+				latest_ts = adepth->getTimeStampUs();
+				has_new_frame = true;
+				frames_received++;
+				return;
+			}
+		} catch (const ob::Error &e) {
+			godot::UtilityFunctions::push_warning("OrbbecCamera: align failed: ", e.what());
+		}
+	}
+	std::shared_ptr<ob::VideoStreamProfile> profile = depth->getStreamProfile()->as<ob::VideoStreamProfile>();
+	OBCameraIntrinsic in = profile->getIntrinsic();
+	on_depth(reinterpret_cast<const uint16_t *>(depth->getData()), depth->getWidth(), depth->getHeight(),
+			depth->getValueScale(), in.fx, in.fy, in.cx, in.cy, depth->getTimeStampUs());
+}
+
+godot::Ref<godot::Image> OrbbecCamera::get_color_image() {
+	godot::PackedByteArray data;
+	int w, h;
+	{
+		std::lock_guard<std::mutex> lock(frame_mutex);
+		if (color_w == 0 || color_rgb.empty()) {
+			return godot::Ref<godot::Image>();
+		}
+		w = color_w;
+		h = color_h;
+		data.resize(color_rgb.size());
+		std::memcpy(data.ptrw(), color_rgb.data(), color_rgb.size());
+	}
+	return godot::Image::create_from_data(w, h, false, godot::Image::FORMAT_RGB8, data);
+}
+
+int OrbbecCamera::get_color_width() const { return color_w; }
+int OrbbecCamera::get_color_height() const { return color_h; }
+int OrbbecCamera::get_color_frame_id() const { return color_frame_id; }
+double OrbbecCamera::get_timestamp() const { return color_ts_ms; }
+
+float OrbbecCamera::get_depth_at(int x, int y, int radius) const {
+	std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(frame_mutex));
+	if (aligned_w == 0) {
+		return 0.0f;
+	}
+	std::vector<uint16_t> samples;
+	samples.reserve((2 * radius + 1) * (2 * radius + 1));
+	for (int dy = -radius; dy <= radius; dy++) {
+		for (int dx = -radius; dx <= radius; dx++) {
+			int u = x + dx, v = y + dy;
+			if (u < 0 || v < 0 || u >= aligned_w || v >= aligned_h) {
+				continue;
+			}
+			uint16_t d = aligned_depth_mm[v * aligned_w + u];
+			if (d >= 250 && d <= 6000) {
+				samples.push_back(d);
+			}
+		}
+	}
+	if (samples.empty()) {
+		return 0.0f;
+	}
+	std::nth_element(samples.begin(), samples.begin() + samples.size() / 2, samples.end());
+	return samples[samples.size() / 2] / 1000.0f;
+}
+
+godot::Vector3 OrbbecCamera::deproject_pixel(float x, float y, float depth_m) const {
+	if (col_fx <= 0.0f) {
+		return godot::Vector3(0, 0, depth_m);
+	}
+	return godot::Vector3((x - col_cx) / col_fx * depth_m, -(y - col_cy) / col_fy * depth_m, depth_m);
+}
+
+godot::PackedFloat32Array OrbbecCamera::get_intrinsics() const {
+	godot::PackedFloat32Array a;
+	a.push_back(col_fx);
+	a.push_back(col_fy);
+	a.push_back(col_cx);
+	a.push_back(col_cy);
+	return a;
 }
 
 // Runs on the SDK's thread: downsample into millimetres and hand over.

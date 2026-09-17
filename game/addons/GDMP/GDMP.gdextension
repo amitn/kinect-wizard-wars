@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "mediapipe_library_init"
+compatibility_minimum = 4.4
+
+[libraries]
+
+linux.arm64 = "res://addons/GDMP/libs/arm64/libGDMP.linux.so"
+linux.x86_64 = "res://addons/GDMP/libs/x86_64/libGDMP.linux.so"
+windows.x86_64 = "res://addons/GDMP/libs/x86_64/GDMP.windows.dll"

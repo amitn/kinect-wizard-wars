@@ -22,6 +22,46 @@ var _camera: Node = null
 var _camera_retry_at := 0.0
 var _tracklog := false        # --tracklog: print a body summary twice a second
 var _tracklog_next := 0.0
+var _pose_mode := false
+
+## Kinect-style joint names -> MediaPipe joints (averaged). "Left" in the game
+## is the image's left, which is the person's right when facing the camera.
+const POSE_JOINTS := {
+	"Head": ["nose"], "Neck": ["left_shoulder", "right_shoulder", "nose"],
+	"SpineShoulder": ["left_shoulder", "right_shoulder"],
+	"SpineMid": ["left_shoulder", "right_shoulder", "left_hip", "right_hip"],
+	"SpineBase": ["left_hip", "right_hip"],
+	"ShoulderLeft": ["right_shoulder"], "ElbowLeft": ["right_elbow"], "WristLeft": ["right_wrist"],
+	"HandLeft": ["right_wrist", "right_index"], "HandTipLeft": ["right_index"], "ThumbLeft": ["right_thumb"],
+	"ShoulderRight": ["left_shoulder"], "ElbowRight": ["left_elbow"], "WristRight": ["left_wrist"],
+	"HandRight": ["left_wrist", "left_index"], "HandTipRight": ["left_index"], "ThumbRight": ["left_thumb"],
+	"HipLeft": ["right_hip"], "KneeLeft": ["right_knee"], "AnkleLeft": ["right_ankle"], "FootLeft": ["right_foot_index"],
+	"HipRight": ["left_hip"], "KneeRight": ["left_knee"], "AnkleRight": ["left_ankle"], "FootRight": ["left_foot_index"],
+}
+
+
+## BodyTracker players -> the body frame format the game consumes.
+func _on_players_updated(players: Array) -> void:
+	var bodies: Array = []
+	var now := Time.get_ticks_msec() / 1000.0
+	for p in players:
+		if not p.visible or now - p.last_seen > 0.3:
+			continue
+		var joints := {}
+		for joint_name in POSE_JOINTS:
+			var sum := Vector3.ZERO
+			var tracked := true
+			for part in POSE_JOINTS[joint_name]:
+				var j: TrackedJoint = p.joints[part]
+				sum += j.position_3d
+				tracked = tracked and j.valid
+			var avg: Vector3 = sum / POSE_JOINTS[joint_name].size()
+			if joint_name == "Head":
+				avg.y += 0.10
+			joints[joint_name] = [avg.x, avg.y, avg.z, 2 if tracked else 1]
+		bodies.append({"id": str(p.id), "hands": {"l": "tracked", "r": "tracked"},
+			"hands_up": p.arms_up, "height": p.standing_height, "joints": joints})
+	_on_raw_frame(bodies, "camera")
 
 
 func _ready() -> void:
@@ -32,15 +72,24 @@ func _ready() -> void:
 	else:
 		print("Tracking: listening for bridge frames on UDP port %d" % port)
 
+	var use_camera := true
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--tracklog":
 			_tracklog = true
-	if ClassDB.class_exists("OrbbecCamera"):
+		elif arg == "--no-camera":
+			use_camera = false   # leave the camera to an external bridge (tools/pose_bridge.py)
+	if use_camera and BodyTracker.camera != null:
 		print("Tracking: OrbbecCamera extension loaded")
-		_camera = ClassDB.instantiate("OrbbecCamera")
-		add_child(_camera)
-		_camera.frame_received.connect(_on_raw_frame.bind("camera"))
-		_try_start_camera()
+		_camera = BodyTracker.camera
+		if BodyTracker.processor.available:
+			# Real skeletons from MediaPipe + depth.
+			BodyTracker.players_updated.connect(_on_players_updated)
+			_pose_mode = true
+			print("Tracking: using MediaPipe pose skeletons")
+		else:
+			# Fallback: the depth-blob tracker inside the extension.
+			_camera.frame_received.connect(_on_raw_frame.bind("camera"))
+			print("Tracking: pose landmarker unavailable (%s), using the depth-blob tracker" % BodyTracker.processor.last_error)
 	else:
 		print("Tracking: OrbbecCamera extension not loaded, using UDP only")
 
@@ -100,6 +149,8 @@ func learn_background() -> void:
 
 
 func source_description() -> String:
+	if has_camera() and _pose_mode:
+		return "Camera: %s  MediaPipe %.0f poses/s, %.0f ms (%d bodies)" % [_camera.get_device_name(), BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size()]
 	if has_camera():
 		if not _camera.is_background_ready():
 			return "Camera: %s  -  learning the empty room, stay out of view" % _camera.get_device_name()
@@ -122,7 +173,7 @@ func _try_start_camera() -> void:
 
 
 func _process(_delta: float) -> void:
-	if _camera != null and not _camera.is_running() and Time.get_ticks_msec() / 1000.0 >= _camera_retry_at:
+	if _camera != null and not _pose_mode and not _camera.is_running() and Time.get_ticks_msec() / 1000.0 >= _camera_retry_at:
 		_try_start_camera()
 
 	# Drain the socket and keep only the newest packet; stale frames are useless.

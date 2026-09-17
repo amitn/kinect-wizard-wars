@@ -16,6 +16,8 @@
 
 namespace ob {
 class Pipeline;
+class FrameSet;
+class Align;
 }
 
 namespace wizardwars {
@@ -48,6 +50,22 @@ public:
 	void set_debug_enabled(bool enabled);
 	godot::Ref<godot::Image> get_debug_image() const;
 
+	// --- Color + aligned depth for pose estimation (see NEW_INTEGRATION) ---
+	/// Latest color frame as an RGB8 Image (a copy), or null before the first frame.
+	godot::Ref<godot::Image> get_color_image();
+	int get_color_width() const;
+	int get_color_height() const;
+	/// Frame counter of the latest color frame; poll it to avoid processing a frame twice.
+	int get_color_frame_id() const;
+	/// Timestamp (ms) of the latest color frame.
+	double get_timestamp() const;
+	/// Median depth in meters in a (2*radius+1)^2 window of the aligned depth at a color pixel; 0 when unknown.
+	float get_depth_at(int x, int y, int radius) const;
+	/// Camera-space point in meters for a color pixel and depth: +x right, +y up, +z away from the camera.
+	godot::Vector3 deproject_pixel(float x, float y, float depth_m) const;
+	/// Color intrinsics as [fx, fy, cx, cy] (aligned depth shares them).
+	godot::PackedFloat32Array get_intrinsics() const;
+
 	void _process(double delta) override;
 
 protected:
@@ -55,15 +73,25 @@ protected:
 
 private:
 	void on_depth(const uint16_t *data, int width, int height, float scale_mm, float fx, float fy, float cx, float cy, uint64_t timestamp_us);
+	void on_frameset(std::shared_ptr<ob::FrameSet> frames);
 	godot::Array bodies_to_array() const;
 
 	std::shared_ptr<ob::Pipeline> pipeline;
+	std::shared_ptr<ob::Align> align;
 	bool running = false;
+	bool color_enabled = true;
 	godot::String last_error;
 	godot::String device_name;
 
 	// Written by the SDK thread, read on the main thread.
 	std::mutex frame_mutex;
+	std::vector<uint8_t> color_rgb;          // latest color frame, RGB8
+	int color_w = 0, color_h = 0;
+	int color_frame_id = 0;
+	double color_ts_ms = 0.0;
+	std::vector<uint16_t> aligned_depth_mm;  // depth aligned to color, full resolution
+	int aligned_w = 0, aligned_h = 0;
+	float col_fx = 0, col_fy = 0, col_cx = 0, col_cy = 0;
 	std::vector<uint16_t> latest_depth;  // working resolution, millimetres
 	int latest_w = 0, latest_h = 0;
 	int source_w = 0, source_h = 0;
