@@ -16,6 +16,8 @@ const SHIELD_MIN_MANA := 10.0   # cannot raise a shield below this
 const PIXELS_PER_METER := 320.0
 const GROUND_Y := 940.0
 const BODY_TIMEOUT := 1.5       # seconds without a frame before the player counts as lost
+const FOLLOW_RANGE := 380.0     # how far (px) the wizard may wander from its lane centre
+const FOLLOW_SMOOTH := 0.25     # per-frame lerp toward the player's position
 
 var hp := MAX_HP
 var mana := MAX_MANA
@@ -210,7 +212,16 @@ func _update_origin() -> void:
 	var base := body.joint("SpineBase")
 	var foot_drop := base.y - minf(body.joint("FootLeft").y, body.joint("FootRight").y)
 	foot_drop = clampf(foot_drop, 0.6, 1.2)
-	_origin = Vector2(0.0, GROUND_Y - foot_drop * PIXELS_PER_METER)
+	# Follow the player sideways: camera x (mirrored) mapped to the screen, kept
+	# inside this wizard's half of the arena, smoothed so tracking jitter stays hidden.
+	var screen_x := 960.0 + base.x * PIXELS_PER_METER * (-1.0 if mirror_x else 1.0)
+	var target_local_x := clampf(screen_x - position.x, -FOLLOW_RANGE, FOLLOW_RANGE)
+	var new_x := lerpf(_origin.x, target_local_x, FOLLOW_SMOOTH)
+	_origin = Vector2(new_x, GROUND_Y - foot_drop * PIXELS_PER_METER)
+	# Stepping closer makes the wizard a little larger.
+	var depth_scale := clampf(2.4 / maxf(base.z, 0.8), 0.85, 1.15) if base.z > 0.0 else 1.0
+	if fx != null:
+		fx.depth_scale = depth_scale
 
 
 # -- Drawing -----------------------------------------------------------------

@@ -151,9 +151,15 @@ func _update_player(p: TrackedPlayer, det: Dictionary, now: float) -> void:
 	p.position = root
 	p.visible = true
 	p.last_seen = now
-	# Standing height: head to lowest ankle, remembered as a slow maximum.
-	if p.left_foot.valid or p.right_foot.valid:
-		var feet_y := minf(p.left_foot.position_3d.y if p.left_foot.valid else INF, p.right_foot.position_3d.y if p.right_foot.valid else INF)
+	# Standing height: head to lowest ankle, as the median of recent readings so a
+	# single bad frame cannot inflate it.
+	if p.left_foot.valid and p.right_foot.valid and not p.left_foot.depth_inferred and not p.right_foot.depth_inferred:
+		var feet_y := minf(p.left_foot.position_3d.y, p.right_foot.position_3d.y)
 		var h := p.head.position_3d.y - feet_y + 0.12
 		if h > 0.5 and h < 2.3:
-			p.standing_height = maxf(p.standing_height * 0.995, h)
+			p.height_samples.append(h)
+			if p.height_samples.size() > 90:
+				p.height_samples.pop_front()
+			var sorted := p.height_samples.duplicate()
+			sorted.sort()
+			p.standing_height = sorted[sorted.size() / 2]

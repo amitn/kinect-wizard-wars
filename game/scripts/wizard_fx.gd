@@ -41,6 +41,7 @@ var _circle_tex: Texture2D = null
 var _barrier_tex: Texture2D = null
 var _shards_tex: Texture2D = null
 var _pose := "idle"
+var depth_scale := 1.0            # 1 at the ideal distance; set by Wizard from the player's depth
 var _hands_active: Array = [true, true]
 var _outcome := ""
 var _outcome_since := 0.0
@@ -331,7 +332,7 @@ func update_look(silhouette: Image, sil_center: Vector2i, sil_rect: Rect2, joint
 		# relative to the standing figure, keeping the character one size.
 		const POSE_HEIGHT := {"idle": 1.0, "cast": 0.97, "shield": 1.22, "hit": 0.9,
 			"collapse": 0.55, "prone": 0.24, "victory": 1.12}
-		var target_h := (feet_y - head.y) * 1.08 + 20.0
+		var target_h := ((feet_y - head.y) * 1.08 + 20.0) * depth_scale
 		# Animation strips are cut to one uniform height (the standing figure, or the
 		# raised arms for the shield), so they use a flatter factor than the stills.
 		var factor := float(POSE_HEIGHT.get(_pose, 1.0))
