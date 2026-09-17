@@ -46,6 +46,12 @@ Vec3 BodyTracker::unproject(int u, int v, float z_m) const {
 	return p;
 }
 
+void BodyTracker::project(const Vec3 &p, int &u, int &v) const {
+	float z = std::max(p.z, 0.05f);
+	u = static_cast<int>(std::lround(fx * p.x / z + cx));
+	v = static_cast<int>(std::lround(-fy * p.y / z + cy));
+}
+
 void BodyTracker::update_background(const uint16_t *depth_mm) {
 	// The background is the farthest valid depth seen per pixel while learning.
 	const int n = width * height;
@@ -164,8 +170,20 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 	b.centroid.x = static_cast<float>(sx * inv);
 	b.centroid.y = static_cast<float>(sy * inv);
 	b.centroid.z = static_cast<float>(sz * inv);
-	std::nth_element(zs.begin(), zs.begin() + zs.size() / 2, zs.end());
-	const float z_med = zs[zs.size() / 2];
+	// Torso depth: median over the band around the centroid, so extended arms
+	// and the head do not pull it.
+	std::vector<float> torso_zs;
+	torso_zs.reserve(points.size());
+	for (const Vec3 &p : points) {
+		if (p.y > b.centroid.y - 0.2f && p.y < b.centroid.y + 0.3f && std::fabs(p.x - b.centroid.x) < 0.25f) {
+			torso_zs.push_back(p.z);
+		}
+	}
+	if (torso_zs.size() < 20) {
+		torso_zs = zs;
+	}
+	std::nth_element(torso_zs.begin(), torso_zs.begin() + torso_zs.size() / 2, torso_zs.end());
+	const float z_med = torso_zs[torso_zs.size() / 2];
 
 	// Top and bottom of the silhouette: mean of the pixels in the extreme rows.
 	double tx = 0, ty = 0, tz = 0, bx = 0, by = 0, bz = 0;
@@ -225,12 +243,15 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 	b.spine_shoulder = { b.centroid.x, b.bottom.y + 0.80f * baseline, z_med };
 
 	// Hand candidates: above the waist and either sideways, in front, or above the head.
+	// Anything behind the torso plane is depth noise at the silhouette edge, not a hand.
+	// The score is the image-plane reach plus a bonus for being in front, so noisy
+	// far pixels never win over the real hand.
 	const float waist_y = b.centroid.y - 0.15f;
 	const Vec3 torso = { b.centroid.x, b.centroid.y + 0.3f, z_med };
 	Vec3 tip_left, tip_right;
 	float best_left = -1.0f, best_right = -1.0f;
 	for (const Vec3 &p : points) {
-		if (p.y < waist_y) {
+		if (p.y < waist_y || p.z > z_med + 0.25f) {
 			continue;
 		}
 		bool sideways = std::fabs(p.x - b.centroid.x) > params.lateral_arm_m;
@@ -239,7 +260,8 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 		if (!(sideways || in_front || above)) {
 			continue;
 		}
-		float d = dist3(p, torso);
+		float dx = p.x - torso.x, dy = p.y - torso.y;
+		float d = std::sqrt(dx * dx + dy * dy) + std::max(0.0f, z_med - p.z) * 1.2f;
 		if (p.x < b.centroid.x) {
 			if (d > best_left) { best_left = d; tip_left = p; }
 		} else {

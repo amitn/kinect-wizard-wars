@@ -80,6 +80,18 @@ func is_background_ready() -> bool:
 	return _camera == null or not _camera.is_running() or _camera.is_background_ready()
 
 
+## Debug image from the camera extension (depth + blobs + markers), or null.
+func get_camera_debug_image() -> Image:
+	if _camera == null or not _camera.is_running():
+		return null
+	return _camera.get_debug_image()
+
+
+func set_camera_debug(enabled: bool) -> void:
+	if _camera != null:
+		_camera.set_debug_enabled(enabled)
+
+
 ## Re-learn the empty room. Players should step out of view for a second.
 func learn_background() -> void:
 	if _camera != null and _camera.is_running():

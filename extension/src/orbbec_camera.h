@@ -3,7 +3,9 @@
 
 #include "body_tracker.h"
 
+#include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/classes/ref.hpp>
 #include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/string.hpp>
 
@@ -42,6 +44,9 @@ public:
 	godot::String get_device_name() const;
 	int get_depth_width() const;
 	int get_depth_height() const;
+	/// Debug view: the working depth image with foreground tinted and body markers drawn.
+	void set_debug_enabled(bool enabled);
+	godot::Ref<godot::Image> get_debug_image() const;
 
 	void _process(double delta) override;
 
@@ -70,6 +75,11 @@ private:
 	int downsample = 2;
 	BodyTracker tracker;
 	int tracked_count = 0;
+	bool debug_enabled = false;
+	std::vector<uint16_t> last_depth;
+	godot::Ref<godot::Image> debug_image;
+
+	void build_debug_image();
 };
 
 } // namespace wizardwars

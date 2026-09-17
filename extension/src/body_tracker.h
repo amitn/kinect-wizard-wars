@@ -74,6 +74,15 @@ public:
 	const std::vector<TrackedBody> &bodies() const { return current; }
 
 	Vec3 unproject(int u, int v, float z_m) const;
+	/// Pixel coordinates of a camera-space point (working resolution).
+	void project(const Vec3 &p, int &u, int &v) const;
+
+	// Debug access to the last frame's segmentation.
+	const std::vector<uint8_t> &foreground_mask() const { return foreground; }
+	const std::vector<int32_t> &label_map() const { return labels; }
+	const std::vector<uint16_t> &background_map() const { return background; }
+	int frame_width() const { return width; }
+	int frame_height() const { return height; }
 
 private:
 	struct HistoryEntry {

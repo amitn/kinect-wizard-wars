@@ -3,8 +3,11 @@ extends Control
 ## Press D: shows every body the tracker reports, with silhouette, height, depth
 ## and hand tips, so thresholds can be tuned against a real room.
 
-var enabled := false
-var _tex_cache: Dictionary = {}
+var enabled: bool = false:
+	set(v):
+		enabled = v
+		Tracking.set_camera_debug(v)
+var _cam_tex: ImageTexture = null
 
 
 func _ready() -> void:
@@ -21,6 +24,18 @@ func _draw() -> void:
 	if not enabled:
 		return
 	var font := ThemeDB.fallback_font
+	# Camera view (depth + blobs + markers) bottom-left.
+	var cam_img := Tracking.get_camera_debug_image()
+	if cam_img != null:
+		if _cam_tex == null or _cam_tex.get_size() != Vector2(cam_img.get_size()):
+			_cam_tex = ImageTexture.create_from_image(cam_img)
+		else:
+			_cam_tex.update(cam_img)
+		var cam_rect := Rect2(Vector2(20, 1080 - 330), Vector2(480, 300))
+		draw_rect(cam_rect.grow(4), Color(0, 0, 0, 0.7))
+		draw_texture_rect(_cam_tex, cam_rect, false)
+		draw_rect(cam_rect, Color(0.6, 0.9, 1.0, 0.8), false, 2.0)
+		draw_string(font, cam_rect.position + Vector2(6, -6), "CAMERA  depth %dx%d  cyan=centre yellow=head red=L green=R" % [cam_img.get_width(), cam_img.get_height()], HORIZONTAL_ALIGNMENT_LEFT, 600, 14, Color(0.8, 0.95, 1.0))
 	var panel := Rect2(Vector2(1920 - 560, 1080 - 330), Vector2(540, 300))
 	draw_rect(panel, Color(0, 0, 0, 0.7))
 	draw_rect(panel, Color(0.6, 0.9, 1.0, 0.8), false, 2.0)

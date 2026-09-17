@@ -76,6 +76,8 @@ void OrbbecCamera::_bind_methods() {
 	godot::ClassDB::bind_method(D_METHOD("get_device_name"), &OrbbecCamera::get_device_name);
 	godot::ClassDB::bind_method(D_METHOD("get_depth_width"), &OrbbecCamera::get_depth_width);
 	godot::ClassDB::bind_method(D_METHOD("get_depth_height"), &OrbbecCamera::get_depth_height);
+	godot::ClassDB::bind_method(D_METHOD("set_debug_enabled", "enabled"), &OrbbecCamera::set_debug_enabled);
+	godot::ClassDB::bind_method(D_METHOD("get_debug_image"), &OrbbecCamera::get_debug_image);
 
 	ADD_SIGNAL(godot::MethodInfo("frame_received", godot::PropertyInfo(godot::Variant::ARRAY, "bodies")));
 }
@@ -234,7 +236,98 @@ void OrbbecCamera::_process(double) {
 	tracker.set_intrinsics(fx, fy, cx, cy, w, h);
 	tracker.process(depth.data(), ts / 1e6);
 	tracked_count = static_cast<int>(tracker.bodies().size());
+	if (debug_enabled) {
+		last_depth = depth;
+		build_debug_image();
+	}
 	emit_signal("frame_received", bodies_to_array());
+}
+
+void OrbbecCamera::set_debug_enabled(bool enabled) {
+	debug_enabled = enabled;
+	if (!enabled) {
+		debug_image.unref();
+	}
+}
+
+godot::Ref<godot::Image> OrbbecCamera::get_debug_image() const {
+	return debug_image;
+}
+
+namespace {
+void put_marker(godot::PackedByteArray &rgb, int w, int h, int u, int v, uint8_t r, uint8_t g, uint8_t b, int size) {
+	for (int dy = -size; dy <= size; dy++) {
+		for (int dx = -size; dx <= size; dx++) {
+			int x = u + dx, y = v + dy;
+			if (x < 0 || y < 0 || x >= w || y >= h) {
+				continue;
+			}
+			uint8_t *px = rgb.ptrw() + (y * w + x) * 3;
+			px[0] = r; px[1] = g; px[2] = b;
+		}
+	}
+}
+} // namespace
+
+// Depth as grey (near bright), foreground pixels tinted, remembered bodies outlined,
+// hand tips red/green, head yellow, centroid cyan.
+void OrbbecCamera::build_debug_image() {
+	const int w = tracker.frame_width(), h = tracker.frame_height();
+	if (w == 0 || static_cast<int>(last_depth.size()) < w * h) {
+		return;
+	}
+	godot::PackedByteArray rgb;
+	rgb.resize(w * h * 3);
+	const std::vector<uint8_t> &fg = tracker.foreground_mask();
+	const std::vector<int32_t> &labels = tracker.label_map();
+	uint8_t *out = rgb.ptrw();
+	for (int i = 0; i < w * h; i++) {
+		uint16_t d = last_depth[i];
+		uint8_t grey = 0;
+		if (d != 0) {
+			float t = (4000.0f - std::min<float>(d, 4000.0f)) / 3500.0f;  // 0.5 m -> 1, 4 m -> 0
+			grey = static_cast<uint8_t>(std::max(0.0f, std::min(1.0f, t)) * 200.0f);
+		}
+		uint8_t r = grey, g = grey, b = grey;
+		if (i < static_cast<int>(fg.size()) && fg[i]) {
+			int lab = i < static_cast<int>(labels.size()) ? labels[i] : -1;
+			// Tint by label so separate blobs read as separate colours.
+			switch (lab % 4) {
+				case 0: r = grey / 2; g = std::min(255, grey + 90); b = grey / 2; break;
+				case 1: r = std::min(255, grey + 90); g = grey / 2; b = grey / 2; break;
+				case 2: r = grey / 2; g = grey / 2; b = std::min(255, grey + 110); break;
+				default: r = std::min(255, grey + 80); g = std::min(255, grey + 80); b = grey / 2; break;
+			}
+		}
+		out[i * 3] = r; out[i * 3 + 1] = g; out[i * 3 + 2] = b;
+	}
+	for (const TrackedBody &body : tracker.bodies()) {
+		// Bounding box in white.
+		for (int x = body.bbox_x; x < body.bbox_x + body.bbox_w; x++) {
+			put_marker(rgb, w, h, x, body.bbox_y, 255, 255, 255, 0);
+			put_marker(rgb, w, h, x, body.bbox_y + body.bbox_h - 1, 255, 255, 255, 0);
+		}
+		for (int y = body.bbox_y; y < body.bbox_y + body.bbox_h; y++) {
+			put_marker(rgb, w, h, body.bbox_x, y, 255, 255, 255, 0);
+			put_marker(rgb, w, h, body.bbox_x + body.bbox_w - 1, y, 255, 255, 255, 0);
+		}
+		int u, v;
+		tracker.project(body.centroid, u, v);
+		put_marker(rgb, w, h, u, v, 0, 255, 255, 2);
+		tracker.project(body.head, u, v);
+		put_marker(rgb, w, h, u, v, 255, 230, 0, 2);
+		tracker.project(body.spine_shoulder, u, v);
+		put_marker(rgb, w, h, u, v, 255, 255, 255, 1);
+		if (body.hand_left_found) {
+			tracker.project(body.hand_left, u, v);
+			put_marker(rgb, w, h, u, v, 255, 60, 60, 3);
+		}
+		if (body.hand_right_found) {
+			tracker.project(body.hand_right, u, v);
+			put_marker(rgb, w, h, u, v, 60, 255, 60, 3);
+		}
+	}
+	debug_image = godot::Image::create_from_data(w, h, false, godot::Image::FORMAT_RGB8, rgb);
 }
 
 godot::Array OrbbecCamera::bodies_to_array() const {
