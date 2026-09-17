@@ -182,9 +182,13 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 	b.top = { static_cast<float>(tx / tn), static_cast<float>(ty / tn), static_cast<float>(tz / tn) };
 	b.bottom = { static_cast<float>(bx / bn), static_cast<float>(by / bn), static_cast<float>(bz / bn) };
 	b.height_now = b.top.y - b.bottom.y;
+	b.truncated = vmin <= 0 || vmax >= height - 1;
 
-	// Standing height: the smallest height seen over the last few seconds.
-	state.heights.push_back({ time_s, b.height_now });
+	// Standing height: the smallest height seen over the last few seconds, but
+	// only from frames where the whole body is inside the image.
+	if (!b.truncated) {
+		state.heights.push_back({ time_s, b.height_now });
+	}
 	while (!state.heights.empty() && time_s - state.heights.front().t > params.baseline_window_s) {
 		state.heights.pop_front();
 	}
@@ -192,6 +196,10 @@ TrackedBody BodyTracker::analyse(const std::vector<int> &pixels, const uint16_t 
 	for (const HistoryEntry &h : state.heights) {
 		baseline = std::min(baseline, h.height);
 	}
+	if (state.heights.empty()) {
+		baseline = state.last_baseline > 0.0f ? state.last_baseline : b.height_now;
+	}
+	state.last_baseline = baseline;
 	b.height_baseline = baseline;
 
 	// Hands up: silhouette taller than usual and at least two separate columns near the top.
@@ -394,7 +402,7 @@ void BodyTracker::process(const uint16_t *depth_mm, double time_s) {
 	assign_ids(found, chosen, depth_mm, time_s);
 	current.clear();
 	for (TrackedBody &b : found) {
-		if (b.height_now < params.min_height_m) {
+		if (b.height_now < params.min_height_m && !(b.truncated && b.height_baseline >= params.min_height_m)) {
 			continue;
 		}
 		if (std::fabs(b.centroid.x) > params.max_lateral_m) {

@@ -27,6 +27,7 @@ struct TrackedBody {
 	bool hand_left_found = false;
 	bool hand_right_found = false;
 	bool hands_up = false;
+	bool truncated = false;   // silhouette touches the top or bottom image edge
 	float height_now = 0.0f;
 	float height_baseline = 0.0f;
 
@@ -45,7 +46,7 @@ public:
 		float min_range_m = 1.0f;       // anything closer is junk near the lens
 		float max_range_m = 3.6f;       // play area depth; the depth image gets noisy beyond this
 		float max_lateral_m = 1.8f;     // play area half-width; the image edges are noisy too
-		float min_height_m = 1.0f;      // a body must be at least this tall (seated adults pass, furniture fails)
+		float min_height_m = 0.85f;     // a body must be at least this tall (children and seated adults pass)
 		double id_memory_s = 1.0;       // a vanished body keeps its id if it reappears within this
 		int confirm_frames = 6;         // a new body is reported only after this many consecutive frames
 		float bg_margin_m = 0.15f;      // closer than the background by this much = foreground
@@ -86,6 +87,7 @@ private:
 		double last_seen = 0.0;
 		Vec3 last_centroid;
 		int frames_seen = 0;
+		float last_baseline = 0.0f;
 	};
 
 	void update_background(const uint16_t *depth_mm);

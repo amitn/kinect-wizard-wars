@@ -34,6 +34,7 @@ const SHIELD_ON_MARGIN := -0.05
 const SHIELD_OFF_MARGIN := -0.18
 
 var shield_active := false
+var _reach := 1.0   # arm-length scale from body height (1.0 = adult), applied to the distance thresholds
 
 var _history := {"left": [], "right": []}   # arrays of {"t": float, "p": Vector3}
 var _shoulder_x := {"left": -0.2, "right": 0.2}
@@ -54,6 +55,8 @@ func reset() -> void:
 func update(body: BodyData, now: float) -> void:
 	var origin := body.joint("SpineShoulder")
 	var head_y := body.joint("Head").y - origin.y
+	if body.height > 0.0:
+		_reach = clampf(body.height / 1.7, 0.55, 1.1)
 	var hands := {
 		"left": body.joint("HandLeft") - origin,
 		"right": body.joint("HandRight") - origin,
@@ -93,14 +96,14 @@ func _check_bolt(hand: String, now: float) -> bool:
 		return false
 	var cur: Vector3 = h[-1]["p"]
 	if not _armed[hand]:
-		if cur.z > BOLT_REARM_Z:
+		if cur.z > BOLT_REARM_Z * _reach:
 			_armed[hand] = true
 		return false
 	if now - _last_bolt[hand] < BOLT_COOLDOWN:
 		return false
-	if cur.z > BOLT_EXTEND_Z or absf(cur.y) > BOLT_MAX_ABS_Y:
+	if cur.z > BOLT_EXTEND_Z * _reach or absf(cur.y) > BOLT_MAX_ABS_Y * _reach:
 		return false
-	if absf(cur.x - _shoulder_x[hand]) > BOLT_MAX_SIDE:
+	if absf(cur.x - _shoulder_x[hand] * _reach) > BOLT_MAX_SIDE * _reach:
 		return false
 	var past = _sample_at(h, now - BOLT_WINDOW_SEC)
 	var recent = _sample_at(h, now - BOLT_SPEED_WINDOW)
@@ -108,7 +111,7 @@ func _check_bolt(hand: String, now: float) -> bool:
 		return false
 	if absf(cur.x - recent.x) > BOLT_MAX_SIDE_SPEED:
 		return false
-	if past.z - cur.z >= BOLT_PUSH_DIST and absf(cur.x - past.x) <= BOLT_MAX_DRIFT:
+	if past.z - cur.z >= BOLT_PUSH_DIST * _reach and absf(cur.x - past.x) <= BOLT_MAX_DRIFT:
 		_armed[hand] = false
 		_last_bolt[hand] = now
 		bolt_cast.emit(hand)
@@ -124,13 +127,13 @@ func _check_wave(now: float) -> void:
 		if h.is_empty():
 			continue
 		var cur: Vector3 = h[-1]["p"]
-		if cur.z > WAVE_MIN_FRONT_Z or absf(cur.y) > WAVE_MAX_ABS_Y:
+		if cur.z > WAVE_MIN_FRONT_Z * _reach or absf(cur.y) > WAVE_MAX_ABS_Y * _reach:
 			continue
 		var past = _sample_at(h, now - WAVE_WINDOW_SEC)
 		if past == null:
 			continue
 		var dx: float = cur.x - past.x
-		if absf(dx) >= WAVE_SWEEP_DIST:
+		if absf(dx) >= WAVE_SWEEP_DIST * _reach:
 			_last_wave = now
 			_armed[hand] = false
 			wave_cast.emit(hand, 1 if dx > 0.0 else -1)
