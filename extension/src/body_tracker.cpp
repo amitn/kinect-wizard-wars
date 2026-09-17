@@ -24,6 +24,7 @@ void BodyTracker::set_intrinsics(float p_fx, float p_fy, float p_cx, float p_cy,
 		width = p_width;
 		height = p_height;
 		background.assign(width * height, 0);
+		bg_pending.assign(width * height, 0);
 		foreground.assign(width * height, 0);
 		labels.assign(width * height, -1);
 		learn_background();
@@ -32,6 +33,7 @@ void BodyTracker::set_intrinsics(float p_fx, float p_fy, float p_cx, float p_cy,
 
 void BodyTracker::learn_background() {
 	std::fill(background.begin(), background.end(), 0);
+	std::fill(bg_pending.begin(), bg_pending.end(), 0);
 	bg_ready = false;
 	bg_frames_seen = 0;
 }
@@ -69,6 +71,23 @@ void BodyTracker::find_blobs(const uint16_t *depth_mm, std::vector<std::vector<i
 	for (int i = 0; i < n; i++) {
 		uint16_t d = depth_mm[i];
 		bool fg = d >= min_mm && d <= max_mm;
+		if (d != 0 && bg_ready) {
+			// Keep learning: farther is accepted at once, closer only after it stays put.
+			if (d + margin_mm >= background[i] || background[i] == 0) {
+				if (d > background[i]) {
+					background[i] = d;
+				}
+				bg_pending[i] = 0;
+			} else {
+				if (bg_pending[i] < 65535) {
+					bg_pending[i]++;
+				}
+				if (bg_pending[i] >= params.bg_accept_frames) {
+					background[i] = d;
+					bg_pending[i] = 0;
+				}
+			}
+		}
 		if (fg && bg_ready && background[i] != 0 && d + margin_mm >= background[i]) {
 			fg = false;
 		}

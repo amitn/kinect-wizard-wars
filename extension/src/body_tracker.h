@@ -50,6 +50,7 @@ public:
 		float link_max_dz_m = 0.20f;    // neighbouring pixels join a blob only if this close in depth
 		int min_area_px = 250;          // at the working resolution
 		int bg_learn_frames = 45;
+		int bg_accept_frames = 300;     // a closer pixel that stays put this long becomes background
 		int max_bodies = 2;
 		float lateral_arm_m = 0.35f;    // hand candidates: this far sideways from the body axis (arms at rest are ~0.25)
 		float front_arm_m = 0.25f;      // ...or this far in front of the torso
@@ -92,6 +93,7 @@ private:
 	int width = 0, height = 0;
 	float fx = 1.0f, fy = 1.0f, cx = 0.0f, cy = 0.0f;
 	std::vector<uint16_t> background;
+	std::vector<uint16_t> bg_pending;    // per pixel: consecutive frames seen closer than background
 	std::vector<uint8_t> foreground;
 	std::vector<int32_t> labels;
 	bool bg_ready = false;
