@@ -4,7 +4,8 @@ extends Node2D
 ## Debug keys (no camera needed):
 ##   Fire wizard:  Q bolt   W wave   E toggle shield
 ##   Water wizard: I bolt   O wave   P toggle shield
-##   Enter start a round with untracked players, R restart, B re-learn the empty room.
+##   Enter start a round with untracked players, R restart, B re-learn the empty room,
+##   D toggle the tracker debug overlay.
 
 enum State { WAITING, COUNTDOWN, FIGHT, OVER }
 
@@ -38,6 +39,7 @@ var _fire_energy := 0.0
 var _water_energy := 0.0
 var _dim: ColorRect
 var _flash: ColorRect
+var _debug: DebugOverlay
 
 # Debug: `godot --path game -- --screenshots=<dir>` saves the viewport every
 # SHOT_INTERVAL seconds for SHOT_COUNT shots, then quits.
@@ -77,6 +79,9 @@ func _ready() -> void:
 	add_child(_flash)
 
 	_add_ambient_particles()
+	_debug = DebugOverlay.new()
+	_debug.size = Vector2(1920, 1080)
+	add_child(_debug)
 
 	for w in [fire, water]:
 		w.mirror_x = MIRROR
@@ -465,6 +470,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_start_countdown()
 		KEY_B:
 			Tracking.learn_background()
+		KEY_D:
+			_debug.enabled = not _debug.enabled
 		KEY_ESCAPE:
 			get_tree().quit()
 
