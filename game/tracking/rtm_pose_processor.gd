@@ -35,7 +35,7 @@ const COCO_HIPS := [11, 12]
 const NEAR_SURFACE := [7, 8, 9, 10]
 
 var num_poses := 2
-var min_score := 0.35         # mean keypoint confidence for a real person (furniture scores ~0.25)
+var min_score := 0.45         # mean keypoint confidence for a real person (people score 0.65+, furniture and plants 0.25 to 0.35)
 var play_near_m := 0.8
 var play_far_m := 3.6
 var arm_depth_limit_m := 0.8

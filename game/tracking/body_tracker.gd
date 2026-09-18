@@ -182,6 +182,7 @@ func _update_player(p: TrackedPlayer, det: Dictionary, now: float) -> void:
 			j.velocity = Vector3.ZERO
 			if j.position_3d == Vector3.ZERO or p.last_seen == 0.0:
 				j.position_3d = det["root"] + (raw - det["root"]).limit_length(0.9)
+			j.raw_position = j.position_3d
 		conf_sum += j.confidence
 	p.tracking_confidence = conf_sum / maxf(1.0, det["landmarks"].size())
 	var root: Vector3 = det["root"]
