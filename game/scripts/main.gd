@@ -99,7 +99,7 @@ func _ready() -> void:
 	if BodyTracker.processor.available:
 		_pose_gestures = true
 		BodyTracker.gesture.connect(_on_pose_gesture)
-		print("gestures: MediaPipe layer (punch = bolt, swipe = wave)")
+		print("gestures: BodyTracker layer (punch = bolt, swipe = wave)")
 
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--tracklog":
