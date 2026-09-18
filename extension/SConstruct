@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-"""Builds the OrbbecCamera GDExtension.
+"""Builds the OrbbecCamera GDExtension (and RtmPose when ONNX Runtime is given).
 
     cd extension
-    scons platform=windows target=template_release orbbec_sdk=C:/path/to/OrbbecSDK_v2.x_win_x64
+    scons platform=windows target=template_release orbbec_sdk=C:/path/to/OrbbecSDK_v2.x_win_x64 onnxruntime=C:/path/to/onnxruntime-win-x64
     scons platform=linux   target=template_release orbbec_sdk=/path/to/OrbbecSDK_v2.x_linux_arm64
 
 `orbbec_sdk` is the unpacked SDK release folder (it has include/ and lib/).
@@ -19,6 +19,7 @@ env = SConscript("godot-cpp/SConstruct")
 
 opts = Variables([], ARGUMENTS)
 opts.Add("orbbec_sdk", "Unpacked OrbbecSDK v2 release directory", os.environ.get("ORBBEC_SDK_DIR", ""))
+opts.Add("onnxruntime", "Unpacked ONNX Runtime release directory (for RTMPose)", os.environ.get("ONNXRUNTIME_DIR", ""))
 opts.Update(env)
 
 sdk = env.get("orbbec_sdk", "")
@@ -34,6 +35,20 @@ if env["platform"] == "linux":
     env.Append(LIBS=["dl"])
 
 sources = Glob("src/*.cpp")
+
+# RTMPose runs in here through ONNX Runtime's C API. It is optional: without the
+# runtime the extension still builds, just without the RtmPose class, and the
+# game falls back to MediaPipe (GDMP) or the depth-blob tracker.
+ort = env.get("onnxruntime", "")
+if ort and os.path.isfile(os.path.join(ort, "include", "onnxruntime_c_api.h")):
+    env.Append(CPPPATH=[os.path.join(ort, "include")])
+    env.Append(LIBPATH=[os.path.join(ort, "lib")])
+    env.Append(LIBS=["onnxruntime"])
+    env.Append(CPPDEFINES=["HAVE_ONNXRUNTIME"])
+    print("RTMPose: building against " + ort)
+else:
+    sources = [s for s in sources if "rtmpose" not in str(s)]
+    print("RTMPose: no onnxruntime=<dir> given, building without it")
 out_dir = os.path.join("..", "game", "bin", env["platform"])
 library = env.SharedLibrary(
     os.path.join(out_dir, "liborbbecwizard{}{}".format(env["suffix"], env["SHLIBSUFFIX"])),
@@ -47,10 +62,15 @@ def stage_runtime(target, source, env):
     os.makedirs(dest, exist_ok=True)
     if env["platform"] == "windows":
         runtime_files = [os.path.join(sdk, "bin", "OrbbecSDK.dll")]
+        if ort:
+            runtime_files += [os.path.join(ort, "lib", f)
+                              for f in ("onnxruntime.dll", "onnxruntime_providers_shared.dll")]
         ext_src = os.path.join(sdk, "bin", "extensions")
     else:
         lib_dir = os.path.join(sdk, "lib")
         runtime_files = [os.path.join(lib_dir, f) for f in os.listdir(lib_dir) if f.startswith("libOrbbecSDK.so")]
+        if ort and os.path.isdir(os.path.join(ort, "lib")):
+            runtime_files += [os.path.join(ort, "lib", f) for f in os.listdir(os.path.join(ort, "lib")) if f.startswith("libonnxruntime.so")]
         ext_src = os.path.join(lib_dir, "extensions")
     for f in runtime_files:
         if os.path.isfile(f):

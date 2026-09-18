@@ -68,6 +68,12 @@ public:
 	godot::Vector3 deproject_pixel(float x, float y, float depth_m) const;
 	/// Color intrinsics as [fx, fy, cx, cy] (aligned depth shares them).
 	godot::PackedFloat32Array get_intrinsics() const;
+	/// Bounding boxes, in color pixels, of the person-sized things standing
+	/// between near_m and far_m. This is what replaces the person detector a
+	/// top-down pose model normally needs: a depth camera already knows where
+	/// the people are, and unlike the blob tracker it needs no learned
+	/// background - just a depth range and a minimum size.
+	godot::Array get_person_boxes(float near_m, float far_m, float min_height_frac) const;
 
 	void _process(double delta) override;
 

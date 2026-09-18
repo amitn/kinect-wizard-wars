@@ -51,10 +51,15 @@ func _on_players_updated(players: Array) -> void:
 		for joint_name in POSE_JOINTS:
 			var sum := Vector3.ZERO
 			var tracked := true
+			var present := true
 			for part in POSE_JOINTS[joint_name]:
 				var j: TrackedJoint = p.joints[part]
+				if j.position_3d == Vector3.ZERO:
+					present = false   # never filled (RTMPose has no fingers/heels)
 				sum += j.position_3d
 				tracked = tracked and j.valid
+			if not present:
+				continue
 			var avg: Vector3 = sum / POSE_JOINTS[joint_name].size()
 			if joint_name == "Head":
 				avg.y += 0.10
@@ -87,7 +92,7 @@ func _ready() -> void:
 			# Real skeletons from MediaPipe + depth.
 			BodyTracker.players_updated.connect(_on_players_updated)
 			_pose_mode = true
-			print("Tracking: using MediaPipe pose skeletons")
+			print("Tracking: using %s skeletons" % ("RTMPose" if BodyTracker.processor is RtmPoseProcessor else "MediaPipe"))
 		else:
 			# Fallback: the depth-blob tracker inside the extension.
 			_camera.frame_received.connect(_on_raw_frame.bind("camera"))
@@ -152,11 +157,12 @@ func learn_background() -> void:
 
 func source_description() -> String:
 	if has_camera() and _pose_mode:
+		var engine := "RTMPose" if BodyTracker.processor is RtmPoseProcessor else "MediaPipe"
 		var warn := ""
 		for p in BodyTracker.players:
 			if p.visible and p.position.z > 0.0 and p.position.z < 1.2:
 				warn = "   TOO CLOSE: step back to 2 m so the whole body is in view"
-		return "Camera: %s  MediaPipe %.0f poses/s, %.0f ms (%d bodies)%s" % [_camera.get_device_name(), BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size(), warn]
+		return "Camera: %s  %s %.0f poses/s, %.0f ms (%d bodies)%s" % [_camera.get_device_name(), engine, BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size(), warn]
 	if has_camera():
 		if not _camera.is_background_ready():
 			return "Camera: %s  -  learning the empty room, stay out of view" % _camera.get_device_name()

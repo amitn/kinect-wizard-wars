@@ -88,6 +88,7 @@ void OrbbecCamera::_bind_methods() {
 	godot::ClassDB::bind_method(D_METHOD("get_depth_percentile", "x", "y", "radius", "percentile"), &OrbbecCamera::get_depth_percentile);
 	godot::ClassDB::bind_method(D_METHOD("deproject_pixel", "x", "y", "depth_m"), &OrbbecCamera::deproject_pixel);
 	godot::ClassDB::bind_method(D_METHOD("get_intrinsics"), &OrbbecCamera::get_intrinsics);
+	godot::ClassDB::bind_method(D_METHOD("get_person_boxes", "near_m", "far_m", "min_height_frac"), &OrbbecCamera::get_person_boxes, DEFVAL(0.8f), DEFVAL(3.6f), DEFVAL(0.25f));
 
 	ADD_SIGNAL(godot::MethodInfo("frame_received", godot::PropertyInfo(godot::Variant::ARRAY, "bodies")));
 }
@@ -198,6 +199,103 @@ int OrbbecCamera::get_depth_width() const {
 
 int OrbbecCamera::get_depth_height() const {
 	return source_h;
+}
+
+godot::Array OrbbecCamera::get_person_boxes(float near_m, float far_m, float min_height_frac) const {
+	// Camera-space height below which everything is floor. The sensor sits about
+	// a metre up, so the floor lands near -1.0 and a standing person's hips near 0.
+	const float floor_cut_m = -0.85f;
+	godot::Array out;
+	std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(frame_mutex));
+	if (aligned_w == 0 || aligned_h == 0) {
+		return out;
+	}
+	// Work on a coarse grid: a person is hundreds of pixels wide, so eighth
+	// resolution is plenty and keeps this well under a millisecond.
+	const int step = 8;
+	const int gw = aligned_w / step;
+	const int gh = aligned_h / step;
+	if (gw < 4 || gh < 4) {
+		return out;
+	}
+	const uint16_t near_mm = (uint16_t)(near_m * 1000.0f);
+	const uint16_t far_mm = (uint16_t)(far_m * 1000.0f);
+
+	std::vector<uint8_t> mask((size_t)gw * gh, 0);
+	for (int gy = 0; gy < gh; gy++) {
+		for (int gx = 0; gx < gw; gx++) {
+			const uint16_t d = aligned_depth_mm[(size_t)(gy * step) * aligned_w + gx * step];
+			if (d < near_mm || d > far_mm) {
+				continue;
+			}
+			// The floor is in range too, and it connects every person in the room
+			// into one blob the size of the picture. Cut everything below a height
+			// relative to the camera and the people come apart from it - and from
+			// each other.
+			if (col_fy > 0.0f) {
+				const float z = (float)d * 0.001f;
+				const float y_cam = -((float)(gy * step) - col_cy) / col_fy * z;
+				if (y_cam < floor_cut_m) {
+					continue;
+				}
+			}
+			mask[(size_t)gy * gw + gx] = 1;
+		}
+	}
+
+	// Flood fill each blob and keep the ones shaped like a standing person.
+	std::vector<int> stack;
+	const int min_cells = (int)(gw * gh * 0.003f);
+	const int min_h = (int)(gh * min_height_frac);
+	for (int start = 0; start < gw * gh; start++) {
+		if (mask[start] != 1) {
+			continue;
+		}
+		int x0 = gw, x1 = -1, y0 = gh, y1 = -1, cells = 0;
+		stack.clear();
+		stack.push_back(start);
+		mask[start] = 2;
+		while (!stack.empty()) {
+			const int idx = stack.back();
+			stack.pop_back();
+			const int cx = idx % gw;
+			const int cy = idx / gw;
+			cells++;
+			x0 = std::min(x0, cx);
+			x1 = std::max(x1, cx);
+			y0 = std::min(y0, cy);
+			y1 = std::max(y1, cy);
+			const int neighbours[4] = { idx - 1, idx + 1, idx - gw, idx + gw };
+			for (int n = 0; n < 4; n++) {
+				const int next = neighbours[n];
+				if (next < 0 || next >= gw * gh || mask[next] != 1) {
+					continue;
+				}
+				// Do not wrap around the row edges.
+				if ((n == 0 && cx == 0) || (n == 1 && cx == gw - 1)) {
+					continue;
+				}
+				mask[next] = 2;
+				stack.push_back(next);
+			}
+		}
+		const int bw = x1 - x0 + 1;
+		const int bh = y1 - y0 + 1;
+		if (cells < min_cells || bh < min_h) {
+			continue;
+		}
+		// Only the obviously-not-a-person shapes are rejected here: a wall, or
+		// half the picture. Nothing about being taller than wide - in this game
+		// the default pose is arms out, which is wider than it is tall, and a
+		// filter that assumed otherwise threw the players away.
+		if (cells > (gw * gh * 45) / 100 || bw > (gw * 9) / 10) {
+			continue;
+		}
+		out.push_back(godot::Rect2(
+				(float)(x0 * step), (float)(y0 * step),
+				(float)((x1 - x0 + 1) * step), (float)((y1 - y0 + 1) * step)));
+	}
+	return out;
 }
 
 // Runs on the SDK's thread. Depth alone feeds the blob tracker; with color the

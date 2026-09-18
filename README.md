@@ -76,9 +76,17 @@ Everything in `game/art/` is generated with an image model (the `gen-image-cli` 
 
 The game runs without any of these files: `WizardFX` falls back to a procedural robed silhouette, drawn shield disc and shader-only arena. Sprites face right; the water wizard is mirrored in code to face the fire wizard.
 
-## Body tracking (MediaPipe + depth)
+## Body tracking (RTMPose + depth)
 
-Skeletons come from MediaPipe Pose Landmarker running inside Godot through [GDMP](https://github.com/j20001970/GDMP) (`game/addons/GDMP`, prebuilt for Windows and Linux x86_64 and Linux arm64), fed with the Gemini 2 color image. Each of the 33 landmarks gets its depth from the Gemini depth image aligned to color (median of a 5x5 window, widened when empty, carried over briefly when missing, torso depth as the last resort) and is deprojected into camera space with the color intrinsics. MediaPipe's own z is never used as physical depth.
+Skeletons come from **RTMPose** (MMPose) running inside the camera extension in C++ through ONNX
+Runtime, with person crops found from the depth image and every keypoint given real depth from the
+Gemini 2. See `docs/RTMPOSE_PORT.md` for the design, the numbers and the build steps
+(`tools/fetch_onnxruntime.sh`, `tools/fetch_rtmpose_model.sh`, `tools/build_extension.sh`).
+MediaPipe remains the fallback and `--mediapipe` forces it.
+
+### MediaPipe fallback
+
+The previous engine: MediaPipe Pose Landmarker running inside Godot through [GDMP](https://github.com/j20001970/GDMP) (`game/addons/GDMP`, prebuilt for Windows and Linux x86_64 and Linux arm64), fed with the Gemini 2 color image. Each of the 33 landmarks gets its depth from the Gemini depth image aligned to color (median of a 5x5 window, widened when empty, carried over briefly when missing, torso depth as the last resort) and is deprojected into camera space with the color intrinsics. MediaPipe's own z is never used as physical depth.
 
 The tracking layer in `game/tracking/` follows `NEW_INTEGRATION`:
 

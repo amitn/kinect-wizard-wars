@@ -49,13 +49,28 @@ jobs:
             extension/godot-cpp/gen/**/*.obj
           key: godot-cpp-${{ runner.os }}-${{ hashFiles('extension/godot-cpp/gdextension/extension_api.json') }}-msvc-v1
 
+      - name: Download ONNX Runtime and the RTMPose model
+        shell: pwsh
+        run: |
+          $v = "1.20.1"
+          Invoke-WebRequest "https://github.com/microsoft/onnxruntime/releases/download/v$v/onnxruntime-win-x64-$v.zip" -OutFile ort.zip
+          Expand-Archive ort.zip -DestinationPath ort_unpacked
+          $inner = Get-ChildItem ort_unpacked | Select-Object -First 1
+          "ONNXRUNTIME_DIR=$($inner.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Invoke-WebRequest "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-t_simcc-body7_pt-body7_420e-256x192-026a1439_20230504.zip" -OutFile rtm.zip
+          Expand-Archive rtm.zip -DestinationPath rtm_unpacked
+          $onnx = Get-ChildItem rtm_unpacked -Recurse -Filter *.onnx | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path game\models | Out-Null
+          Copy-Item $onnx.FullName game\models\rtmpose-t.onnx
+          Get-Item game\models\rtmpose-t.onnx | Select-Object Length
+
       - name: Build extension (release)
         working-directory: extension
-        run: scons platform=windows target=template_release orbbec_sdk="$env:ORBBEC_SDK_DIR" -j4
+        run: scons platform=windows target=template_release orbbec_sdk="$env:ORBBEC_SDK_DIR" onnxruntime="$env:ONNXRUNTIME_DIR" -j4
 
       - name: Build extension (debug, for the editor)
         working-directory: extension
-        run: scons platform=windows target=template_debug orbbec_sdk="$env:ORBBEC_SDK_DIR" -j4
+        run: scons platform=windows target=template_debug orbbec_sdk="$env:ORBBEC_SDK_DIR" onnxruntime="$env:ONNXRUNTIME_DIR" -j4
 
       - name: Download Godot and export templates
         shell: pwsh
@@ -82,6 +97,8 @@ jobs:
         shell: pwsh
         run: |
           Copy-Item "$env:ORBBEC_SDK_DIR\bin\OrbbecSDK.dll" dist -Force
+          Copy-Item "$env:ONNXRUNTIME_DIR\lib\onnxruntime.dll" dist -Force
+          Copy-Item "$env:ONNXRUNTIME_DIR\lib\onnxruntime_providers_shared.dll" dist -Force
           Copy-Item "$env:ORBBEC_SDK_DIR\bin\extensions" dist\extensions -Recurse -Force
           Copy-Item tools\mock_bridge.py dist -Force
           Copy-Item README.md dist -Force
@@ -133,11 +150,17 @@ jobs:
             extension/godot-cpp/gen/**/*.o
           key: godot-cpp-${{ runner.os }}-${{ hashFiles('extension/godot-cpp/gdextension/extension_api.json') }}-gcc-v1
 
+      - name: Download ONNX Runtime and the RTMPose model
+        run: |
+          tools/fetch_onnxruntime.sh linux-x64
+          tools/fetch_rtmpose_model.sh
+          echo "ONNXRUNTIME_DIR=$GITHUB_WORKSPACE/third_party/onnxruntime-linux-x64" >> "$GITHUB_ENV"
+
       - name: Build extension (release and debug)
         working-directory: extension
         run: |
-          scons platform=linux target=template_release orbbec_sdk="$ORBBEC_SDK_DIR" -j4
-          scons platform=linux target=template_debug orbbec_sdk="$ORBBEC_SDK_DIR" -j4
+          scons platform=linux target=template_release orbbec_sdk="$ORBBEC_SDK_DIR" onnxruntime="$ONNXRUNTIME_DIR" -j4
+          scons platform=linux target=template_debug orbbec_sdk="$ORBBEC_SDK_DIR" onnxruntime="$ONNXRUNTIME_DIR" -j4
           ls -l ../game/bin/linux
 
       - name: Download Godot and export templates
@@ -161,6 +184,7 @@ jobs:
       - name: Stage Orbbec runtime next to the binary
         run: |
           cp orbbec_sdk/lib/libOrbbecSDK.so* dist/
+          cp "$ONNXRUNTIME_DIR"/lib/libonnxruntime.so* dist/
           cp -r orbbec_sdk/lib/extensions dist/extensions
           cp tools/mock_bridge.py README.md dist/
           ls -l dist

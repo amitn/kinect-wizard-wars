@@ -16,10 +16,12 @@ extension/  OrbbecCamera (C++ GDExtension, godot-cpp 4.3, OrbbecSDK v2)
    │  get_color_image(), get_depth_at(x, y, r), deproject_pixel(x, y, z), frame ids, intrinsics
    │  + a depth-only blob tracker (fallback) that emits Kinect-style body frames
    ▼
-game/addons/GDMP  MediaPipe Pose Landmarker inside Godot (prebuilt, Godot 4.4+)
+extension/  RtmPose (C++, ONNX Runtime C API): crop -> 17 COCO keypoints, ~6.6 ms a person
+game/addons/GDMP  MediaPipe Pose Landmarker inside Godot (fallback, Godot 4.4+)
    ▼
 game/tracking/  (GDScript, reusable as a whole)
-   PoseProcessor        color frame -> 33 landmarks -> depth fusion -> camera-space XYZ
+   RtmPoseProcessor     color frame + depth boxes -> RTMPose -> depth fusion -> camera-space XYZ
+   PoseProcessor        the MediaPipe equivalent (fallback), same output
    PlayerIdentityTracker stable Player 1 / Player 2 ids
    PoseFilter           One Euro smoothing per joint
    GestureDetector      push, punch, swipe, arms_up, hands_together, jump, crouch
@@ -83,14 +85,22 @@ Build: `cd extension && scons platform=windows target=template_release orbbec_sd
 (MSVC on Windows, or llvm-mingw cross-build from Linux; see the README). The SConstruct copies
 `OrbbecSDK.dll` and the SDK's `extensions/` folder next to the built DLL. Both must ship with the game.
 
-### 3.2 GDMP (`game/addons/GDMP`)
+### 3.2 RtmPose (`extension/src/rtmpose.cpp`)
+
+The pose model, in the extension. `initialize(model_bytes, threads)`, `infer(image, box)` returning
+one `Vector3` (x px, y px, score) per COCO keypoint, `get_last_ms()`. It needs a crop: get it from
+`OrbbecCamera.get_person_boxes()` or from the previous frame's keypoints, as
+`rtm_pose_processor.gd` does. Built when SCons gets `onnxruntime=<dir>`; `tools/build_extension.sh`
+does that. Details and numbers in `docs/RTMPOSE_PORT.md`.
+
+### 3.3 GDMP (`game/addons/GDMP`, fallback)
 
 Prebuilt MediaPipe for Godot. We use only `MediaPipePoseLandmarker`, `MediaPipeImage`,
 `MediaPipeTaskBaseOptions`. It needs Godot 4.4 or newer and ships Windows x86_64, Linux x86_64 and
 Linux arm64 libraries. The model file lives in `game/models/pose_landmarker_lite.task`; `full` and
 `heavy` variants from the same MediaPipe release are drop-in replacements (more accuracy, more CPU).
 
-### 3.3 Tracking layer (`game/tracking/`)
+### 3.4 Tracking layer (`game/tracking/`)
 
 Copy the folder unchanged into a new project and register `BodyTracker` as an autoload. Public API:
 
@@ -136,7 +146,7 @@ Tuning knobs worth knowing: `PoseProcessor.play_near_m / play_far_m` (detections
 dropped), `min_score` (mean landmark visibility to count as a person), `arm_depth_limit_m`,
 `PlayerIdentityTracker.max_match_distance`, `PoseFilter.min_cutoff / beta`.
 
-### 3.4 Body-frame format and UDP (`game/scripts/tracking.gd`, `tools/mock_bridge.py`)
+### 3.5 Body-frame format and UDP (`game/scripts/tracking.gd`, `tools/mock_bridge.py`)
 
 Wizard Wars predates the pose layer, so it consumes "body frames": dictionaries with a Kinect-style
 joint set (`SpineBase`, `SpineShoulder`, `Head`, `HandLeft`, `HandRight`, feet, and optionally the

@@ -33,3 +33,7 @@ images/
 
 # Orbbec SDK runtime log
 game/Log/
+
+# Build dependencies fetched on demand (tools/fetch_*.sh) and the pose model
+third_party/
+game/models/*.onnx

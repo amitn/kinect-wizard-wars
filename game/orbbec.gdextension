@@ -15,6 +15,6 @@ linux.release.arm64 = "res://bin/linux/liborbbecwizard.linux.template_release.ar
 
 [dependencies]
 
-windows.x86_64 = { "res://bin/windows/OrbbecSDK.dll": "" }
+windows.x86_64 = { "res://bin/windows/OrbbecSDK.dll": "", "res://bin/windows/onnxruntime.dll": "" }
 linux.x86_64 = { "res://bin/linux/libOrbbecSDK.so": "", "res://bin/linux/libOrbbecSDK.so.2": "" }
 linux.arm64 = { "res://bin/linux/libOrbbecSDK.so": "", "res://bin/linux/libOrbbecSDK.so.2": "" }

@@ -78,6 +78,11 @@ func _draw() -> void:
 					var j: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[i]]
 					draw_string(font, pts[i] + Vector2(5, -3), "z%.2f" % j.position_3d.z, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
 				draw_string(font, pts[0] + Vector2(-30, -22), "P%d %.2f" % [p.id, p.tracking_confidence], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
+			if BodyTracker.processor is RtmPoseProcessor:
+				for b in BodyTracker.processor.last_boxes:
+					var r: Rect2 = b
+					var bx := pose_rect.position.x + pose_rect.size.x - (r.position.x + r.size.x) * sc.x
+					draw_rect(Rect2(Vector2(bx, pose_rect.position.y + r.position.y * sc.y), r.size * sc), Color(1, 1, 1, 0.5), false, 1.0)
 			draw_rect(pose_rect, Color(0.6, 0.9, 1.0, 0.8), false, 2.0)
 			draw_string(font, pose_rect.position + Vector2(6, -6), "POSE  %.0f/s  %.0f ms   yellow = depth carried over, red = low confidence" % [BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms], HORIZONTAL_ALIGNMENT_LEFT, 640, 14, Color(0.8, 0.95, 1.0))
 			pose_drawn = true

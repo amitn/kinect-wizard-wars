@@ -17,7 +17,9 @@ signal gesture(player: TrackedPlayer, gesture_name: String)
 signal players_updated(players: Array)
 
 var camera: Node = null            # OrbbecCamera, or null when the extension is missing
-var processor := PoseProcessor.new()
+## RTMPose (in the extension, ONNX Runtime) when the build carries it, MediaPipe
+## (GDMP) otherwise. Both emit the same people, so nothing else knows which runs.
+var processor = PoseProcessor.new()
 var identity := PlayerIdentityTracker.new()
 var gestures := GestureDetector.new()
 var enabled := true
@@ -45,12 +47,26 @@ func _ready() -> void:
 	else:
 		status = "OrbbecCamera extension not loaded"
 	if camera != null:
-		if processor.setup(camera):
+		var force_mediapipe := false
+		for arg in OS.get_cmdline_user_args():
+			if arg == "--mediapipe":
+				force_mediapipe = true
+		var rtm := RtmPoseProcessor.new()
+		var rtm_error := "--mediapipe" if force_mediapipe else ""
+		if not force_mediapipe:
+			if rtm.setup(camera):
+				processor = rtm
+			else:
+				rtm_error = rtm.last_error
+		if processor == rtm:
 			processor.poses_ready.connect(_on_poses)
-			print("BodyTracker: MediaPipe pose landmarker ready")
+			print("BodyTracker: RTMPose ready (in-extension, boxes from depth)")
+		elif processor.setup(camera):
+			processor.poses_ready.connect(_on_poses)
+			print("BodyTracker: MediaPipe pose landmarker ready (RTMPose: %s)" % rtm_error)
 		else:
-			status = "pose: " + processor.last_error
-			push_warning("BodyTracker: " + processor.last_error)
+			status = "pose: " + processor.last_error + " / RTMPose: " + rtm_error
+			push_warning("BodyTracker: " + status)
 
 
 func _try_start_camera() -> void:
