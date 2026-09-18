@@ -10,8 +10,8 @@ var push_travel_speed := 0.5   # ...while still moving forward at least this fas
 var push_window := 0.35
 var settle_s := 0.6            # no gestures until a player has been tracked this long
 var punch_cooldown := 0.5
-var swipe_speed := 1.8         # sideways hand speed
-var swipe_min_travel := 0.45   # meters within the window
+var swipe_speed := 1.2         # sideways hand speed
+var swipe_min_travel := 0.35   # meters within the window
 var swipe_cooldown := 1.0
 var hands_together_dist := 0.18
 var crouch_ratio := 0.75       # hips lower than this fraction of the standing hip height
@@ -39,8 +39,10 @@ func _cool(key: String, now: float, cooldown: float) -> bool:
 ## Returns the gestures that fired this frame and updates derived state on the player.
 func update(p: TrackedPlayer, now: float) -> Array[String]:
 	var fired: Array[String] = []
-	var shoulders := p.shoulder_center()
-	var head := p.head.position_3d
+	# Gesture geometry works on the raw (unfiltered) positions: the smoothing that
+	# keeps the avatar calm also lags a fast punch by exactly the frames that matter.
+	var shoulders := (p.left_shoulder.raw_position + p.right_shoulder.raw_position) * 0.5
+	var head := p.head.raw_position
 	# Shorter players have shorter arms: scale the distance and speed thresholds.
 	var reach := clampf(p.standing_height / 1.7, 0.75, 1.1) if p.standing_height > 0.0 else 1.0
 	# Fresh tracks have no history and jumpy first frames: let them settle.
@@ -48,7 +50,7 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 
 	# Arms up: both wrists above the head.
 	p.arms_up = p.left_hand.valid and p.right_hand.valid \
-		and p.left_hand.position_3d.y > head.y and p.right_hand.position_3d.y > head.y
+		and p.left_hand.raw_position.y > head.y and p.right_hand.raw_position.y > head.y
 
 	# Hands together: true 3D distance.
 	p.hands_together = p.left_hand.valid and p.right_hand.valid \
@@ -59,7 +61,8 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		var hand: TrackedJoint = p.joint(side + "_wrist")
 		if not hand.valid:
 			continue
-		var forward := shoulders.z - hand.position_3d.z
+		var hpos := hand.raw_position
+		var forward := shoulders.z - hpos.z
 		# Push: fast forward velocity, or a clear forward travel inside a short window
 		# (robust against the smoothing filter damping the velocity).
 		var pkey := "%d:%s" % [p.id, side]
@@ -78,11 +81,11 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		# Swipe: sideways travel over the last 0.4 s at chest height, in front of the body.
 		var key := "%d:%s" % [p.id, side]
 		var hist: Array = _swipe_hist.get(key, [])
-		hist.append([now, hand.position_3d.x])
+		hist.append([now, hpos.x])
 		while hist.size() > 0 and now - hist[0][0] > 0.4:
 			hist.pop_front()
 		_swipe_hist[key] = hist
-		var at_chest := absf(hand.position_3d.y - shoulders.y) < 0.35 * reach and forward > 0.1 * reach
+		var at_chest := absf(hpos.y - shoulders.y) < 0.4 * reach and forward > -0.05
 		if hist.size() >= 3 and at_chest and absf(hand.velocity.x) > swipe_speed * reach:
 			var dx: float = hist[-1][1] - hist[0][1]
 			if settled and absf(dx) > swipe_min_travel * reach and _cool("%d:swipe" % p.id, now, swipe_cooldown):

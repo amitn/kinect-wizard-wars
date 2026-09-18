@@ -29,6 +29,7 @@ var last_pose_time := 0.0
 
 var _camera_retry_at := 0.0
 var _was_tracking := false
+var _handlog := false
 var _frame_times: Array[float] = []
 var _last_frame_id := 0
 
@@ -37,6 +38,8 @@ func _ready() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--no-camera":
 			enabled = false
+		elif arg == "--handlog":
+			_handlog = true
 	if not enabled:
 		status = "disabled (--no-camera)"
 		return
@@ -136,8 +139,17 @@ func _on_poses(people: Array, _timestamp_ms: int) -> void:
 		_update_player(p, det, now)
 		if is_new:
 			player_entered.emit(p)
-		for g in gestures.update(p, now):
+		var fired := gestures.update(p, now)
+		for g in fired:
 			gesture.emit(p, g)
+		if _handlog:
+			var sh := (p.left_shoulder.raw_position + p.right_shoulder.raw_position) * 0.5
+			var l := p.left_hand
+			var r := p.right_hand
+			print("hand t=%.2f id=%d z_sh=%.2f  L fwd=%.2f vz=%+.1f x=%.2f c=%.2f%s  R fwd=%.2f vz=%+.1f x=%.2f c=%.2f%s %s" % [
+				now, p.id, sh.z, sh.z - l.raw_position.z, l.velocity.z, l.raw_position.x, l.confidence, "i" if l.depth_inferred else "",
+				sh.z - r.raw_position.z, r.velocity.z, r.raw_position.x, r.confidence, "i" if r.depth_inferred else "",
+				" ".join(fired)])
 	players_updated.emit(players)
 
 
