@@ -35,8 +35,8 @@ const POSE_JOINTS := {
 	"HandLeft": ["right_wrist", "right_index"], "HandTipLeft": ["right_index"], "ThumbLeft": ["right_thumb"],
 	"ShoulderRight": ["left_shoulder"], "ElbowRight": ["left_elbow"], "WristRight": ["left_wrist"],
 	"HandRight": ["left_wrist", "left_index"], "HandTipRight": ["left_index"], "ThumbRight": ["left_thumb"],
-	"HipLeft": ["right_hip"], "KneeLeft": ["right_knee"], "AnkleLeft": ["right_ankle"], "FootLeft": ["right_foot_index"],
-	"HipRight": ["left_hip"], "KneeRight": ["left_knee"], "AnkleRight": ["left_ankle"], "FootRight": ["left_foot_index"],
+	"HipLeft": ["right_hip"], "KneeLeft": ["right_knee"], "AnkleLeft": ["right_ankle"], "FootLeft": ["right_ankle"],
+	"HipRight": ["left_hip"], "KneeRight": ["left_knee"], "AnkleRight": ["left_ankle"], "FootRight": ["left_ankle"],
 }
 
 
@@ -63,6 +63,8 @@ func _on_players_updated(players: Array) -> void:
 			var avg: Vector3 = sum / POSE_JOINTS[joint_name].size()
 			if joint_name == "Head":
 				avg.y += 0.10
+			elif joint_name == "FootLeft" or joint_name == "FootRight":
+				avg.y -= 0.08   # ankles sit a hand above the floor
 			elif joint_name == "SpineBase":
 				avg = p.position   # the tracker's root: torso depth, hips or shoulder-based
 			joints[joint_name] = [avg.x, avg.y, avg.z, 2 if tracked else 1]

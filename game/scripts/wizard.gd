@@ -175,6 +175,26 @@ func drain_mana(amount: float) -> void:
 		shield_up = false
 
 
+const HEAL_COST := 30.0
+const HEAL_AMOUNT := 18.0
+const HEAL_COOLDOWN := 5.0
+var _last_heal := -100.0
+
+
+func can_heal(now: float) -> bool:
+	return hp > 0.0 and hp < MAX_HP and mana >= HEAL_COST and now - _last_heal >= HEAL_COOLDOWN
+
+
+func heal(now: float) -> bool:
+	if not can_heal(now):
+		return false
+	_last_heal = now
+	mana = maxf(0.0, mana - HEAL_COST)
+	hp = minf(MAX_HP, hp + HEAL_AMOUNT)
+	_cast_flash = 0.4
+	return true
+
+
 func take_damage(amount: float) -> void:
 	if hp <= 0.0:
 		return

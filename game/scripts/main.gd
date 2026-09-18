@@ -2,8 +2,8 @@ extends Node2D
 ## Round flow, player-to-body assignment, spell spawning and collisions.
 ##
 ## Debug keys (no camera needed):
-##   Fire wizard:  Q bolt   W wave   E toggle shield
-##   Water wizard: I bolt   O wave   P toggle shield
+##   Fire wizard:  Q bolt   W wave   E toggle shield   A heal
+##   Water wizard: I bolt   O wave   P toggle shield   K heal
 ##   Enter start a round with untracked players, R restart, B re-learn the empty room,
 ##   D cycle the debug overlay (skeleton, skeleton + camera, off), T open the body tracking demo scene.
 
@@ -43,6 +43,7 @@ var _debug: DebugOverlay
 var _pose_gestures := false   # true when BodyTracker's gestures drive casting
 var _ko_after_fight := -1.0
 var _fight_time := 0.0
+var _heal_hold: Dictionary = {}   # wizard -> consecutive hands-together events
 
 # Debug: `godot --path game -- --screenshots=<dir>` saves the viewport every
 # SHOT_INTERVAL seconds for SHOT_COUNT shots, then quits.
@@ -348,6 +349,20 @@ func _on_wave(hand: String, _direction: int, w: Wizard) -> void:
 	_cast(Spell.Kind.WAVE, w, w.hand_global_position(hand))
 
 
+func _heal(w: Wizard) -> void:
+	if state != State.FIGHT:
+		return
+	if not w.heal(_now()):
+		return
+	print("%s heals (hp %d, mana left %d)" % [w.display_name(), w.hp, w.mana])
+	var at := w.chest_global_position()
+	var c := Color(0.55, 1.0, 0.55)
+	FXRing.spawn(spells_root, at, c, 260.0, 0.6)
+	FXRing.spawn(spells_root, Vector2(w.position.x, Wizard.GROUND_Y + 6.0), c, 300.0, 0.8, 0.28)
+	_burst(at, c, 50)
+	w.fx.burst_shards(at, Color(0.7, 1.0, 0.7), 320.0)
+
+
 func _wizard_for(player: TrackedPlayer) -> Wizard:
 	for w in [fire, water]:
 		if w.body_id == str(player.id):
@@ -369,6 +384,14 @@ func _on_pose_gesture(player: TrackedPlayer, gesture_name: String) -> void:
 			_cast(Spell.Kind.BOLT, w, w.hand_global_position("left"))
 		"swipe_left", "swipe_right":
 			_cast(Spell.Kind.WAVE, w, w.hand_global_position("right"))
+		"hands_together":
+			# Hold both hands together at the chest for about a second to heal.
+			_heal_hold[w] = int(_heal_hold.get(w, 0)) + 1
+			if _heal_hold[w] >= 2:
+				_heal_hold[w] = 0
+				_heal(w)
+		_:
+			_heal_hold[w] = 0
 
 
 func _cast(kind: Spell.Kind, w: Wizard, origin: Vector2) -> void:
@@ -512,6 +535,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_Q: _cast(Spell.Kind.BOLT, fire, fire.hand_global_position("right"))
 		KEY_W: _cast(Spell.Kind.WAVE, fire, fire.hand_global_position("right"))
 		KEY_E: fire.set_shield(not fire.shield_up)
+		KEY_A: _heal(fire)
+		KEY_K: _heal(water)
 		KEY_I: _cast(Spell.Kind.BOLT, water, water.hand_global_position("right"))
 		KEY_O: _cast(Spell.Kind.WAVE, water, water.hand_global_position("right"))
 		KEY_P: water.set_shield(not water.shield_up)

@@ -24,7 +24,8 @@ GitHub Actions builds the whole thing into a ready-to-run Windows x64 app on eve
 |--------|-------------------------------------------|------|--------|
 | Bolt   | Punch one hand straight at the camera     | 15   | 12 damage, fast |
 | Wave   | Sweep a hand sideways in front of you     | 35   | 25 damage, slow, tall; absorbs bolts |
-| Shield | Raise both hands above your head, hold    | 20/s | Blocks everything while held |
+| Shield | Raise both hands above your head, hold    | 11/s | Blocks everything while held |
+| Heal   | Press both hands together at your chest for a second | 30 | Restores 18 health, once every 5 seconds |
 
 Mana regenerates at 12 per second. Health is 100. First to zero loses.
 When the round is over, both players raise their hands together to rematch.
@@ -55,8 +56,8 @@ Windows on ARM works too: the app and the SDK are x64 and run under emulation, a
 
 | Key | Action |
 |-----|--------|
-| Q / W / E | Fire wizard: bolt / wave / toggle shield |
-| I / O / P | Water wizard: bolt / wave / toggle shield |
+| Q / W / E / A | Fire wizard: bolt / wave / toggle shield / heal |
+| I / O / P / K | Water wizard: bolt / wave / toggle shield / heal |
 | Enter | Start a round even if nobody is tracked |
 | R | Restart the round |
 | B | Re-learn the empty-room background |
