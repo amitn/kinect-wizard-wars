@@ -28,6 +28,8 @@ const MODEL_PATH := "res://models/rtmpose-t.onnx"
 const COCO_TO_JOINT := [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]
 const COCO_LEFT_WRIST := 9
 const COCO_RIGHT_WRIST := 10
+const COCO_LEFT_ELBOW := 7
+const COCO_RIGHT_ELBOW := 8
 const COCO_SHOULDERS := [5, 6]
 const COCO_HIPS := [11, 12]
 ## Wrists and elbows read the nearest surface; a hand is in front of what is
@@ -253,6 +255,20 @@ func _person_from_box(image: Image, box: Rect2) -> Dictionary:
 	var landmarks: Array = []
 	for i in COCO_TO_JOINT.size():
 		landmarks.append(_landmark(kps[i], COCO_TO_JOINT[i], torso_z, width, height, i in NEAR_SURFACE))
+	# A punch comes straight at the camera: the arm foreshortens to almost nothing in
+	# the image and the wrist keypoint lands on the forearm or the torso, so the wrist's
+	# own depth window sees the body. The fist is still the nearest surface along the
+	# elbow-to-wrist line, extended past the wrist; use that when it is closer.
+	for pair in [[COCO_LEFT_ELBOW, COCO_LEFT_WRIST, 9], [COCO_RIGHT_ELBOW, COCO_RIGHT_WRIST, 10]]:
+		var lm: Dictionary = landmarks[pair[2]]
+		var front := _arm_front_depth(kps[pair[0]], kps[pair[1]], width, height)
+		if front > 0.0 and torso_z - front > 0.12 and absf(front - torso_z) <= arm_depth_limit_m:
+			var wrist_z: float = lm["position_3d"].z
+			if lm["depth_inferred"] or front < wrist_z - 0.05:
+				lm["position_3d"] = _camera.deproject_pixel(lm["pixel"].x, lm["pixel"].y, front)
+				lm["depth_inferred"] = false
+				lm["depth_ok"] = true
+		lm["depth_raw"] = front
 	# COCO has no fingers; the game's index joints follow the wrists so that
 	# anything reading them gets something sane rather than the origin.
 	landmarks.append(_landmark(kps[COCO_LEFT_WRIST], 19, torso_z, width, height, true))
@@ -302,6 +318,27 @@ func _landmark(kp: Vector3, joint_index: int, torso_z: float, width: float, heig
 		"depth_ok": not inferred,
 		"depth_inferred": inferred,
 	}
+
+
+## Nearest surface along the forearm, from the elbow through the wrist and 60 percent
+## beyond it (where the fist is), sampled every few pixels with a small window.
+func _arm_front_depth(elbow: Vector3, wrist: Vector3, width: float, height: float) -> float:
+	if wrist.z <= 0.1:
+		return 0.0
+	var a := Vector2(elbow.x, elbow.y)
+	var b := Vector2(wrist.x, wrist.y)
+	if elbow.z <= 0.1 or a.distance_to(b) < 4.0:
+		a = b - Vector2(0, 20)
+	var best := 0.0
+	for i in 9:
+		var t := 0.4 + i * 0.15   # 0.4 .. 1.6 along elbow->wrist
+		var pt := a.lerp(b, t)
+		if pt.x < 0 or pt.y < 0 or pt.x >= width or pt.y >= height:
+			continue
+		var d: float = _camera.get_depth_percentile(int(pt.x), int(pt.y), 3, 0.15)
+		if d > 0.0 and (best == 0.0 or d < best):
+			best = d
+	return best
 
 
 func _depth_at(kp: Vector3, near_surface: bool) -> float:

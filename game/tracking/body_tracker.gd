@@ -146,9 +146,14 @@ func _on_poses(people: Array, _timestamp_ms: int) -> void:
 			var sh := (p.left_shoulder.raw_position + p.right_shoulder.raw_position) * 0.5
 			var l := p.left_hand
 			var r := p.right_hand
-			print("hand t=%.2f id=%d z_sh=%.2f  L fwd=%.2f vz=%+.1f x=%.2f c=%.2f%s  R fwd=%.2f vz=%+.1f x=%.2f c=%.2f%s %s" % [
-				now, p.id, sh.z, sh.z - l.raw_position.z, l.velocity.z, l.raw_position.x, l.confidence, "i" if l.depth_inferred else "",
-				sh.z - r.raw_position.z, r.velocity.z, r.raw_position.x, r.confidence, "i" if r.depth_inferred else "",
+			var dl := 0.0
+			var dr := 0.0
+			for lm in det["landmarks"]:
+				if lm["index"] == 15: dl = float(lm.get("depth_raw", 0.0))
+				elif lm["index"] == 16: dr = float(lm.get("depth_raw", 0.0))
+			print("hand t=%.2f id=%d z_sh=%.2f  L fwd=%.2f vz=%+.1f x=%.2f c=%.2f%s arm=%.2f  R fwd=%.2f vz=%+.1f x=%.2f c=%.2f%s arm=%.2f %s" % [
+				now, p.id, sh.z, sh.z - l.raw_position.z, l.velocity.z, l.raw_position.x, l.confidence, "i" if l.depth_inferred else "", dl,
+				sh.z - r.raw_position.z, r.velocity.z, r.raw_position.x, r.confidence, "i" if r.depth_inferred else "", dr,
 				" ".join(fired)])
 	players_updated.emit(players)
 
