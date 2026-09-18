@@ -335,7 +335,12 @@ func update_look(silhouette: Image, sil_center: Vector2i, sil_rect: Rect2, joint
 		# relative to the standing figure, keeping the character one size.
 		const POSE_HEIGHT := {"idle": 1.0, "cast": 0.97, "shield": 1.22, "hit": 0.9,
 			"collapse": 0.55, "prone": 0.24, "victory": 1.12}
-		var target_h := ((feet_y - head.y) * 1.08 + 20.0) * depth_scale
+		# The wizard is a character, not a measurement: a fixed on-screen size that
+		# only nods to the player (children a little smaller, adults a little
+		# larger) and grows slightly as they step toward the camera.
+		var tracked_h := feet_y - head.y
+		var person_factor := clampf(tracked_h / 560.0, 0.9, 1.1) if tracked_h > 100.0 else 1.0
+		var target_h := 640.0 * person_factor * depth_scale
 		# Animation strips are cut to one uniform height (the standing figure, or the
 		# raised arms for the shield), so they use a flatter factor than the stills.
 		var factor := float(POSE_HEIGHT.get(_pose, 1.0))
