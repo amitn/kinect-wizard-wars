@@ -131,6 +131,8 @@ func _on_poses(people: Array, _timestamp_ms: int) -> void:
 		var det: Dictionary = people[k]
 		var p: TrackedPlayer = assigned[k]
 		var is_new := p.last_seen == 0.0
+		if is_new:
+			p.first_seen = now
 		_update_player(p, det, now)
 		if is_new:
 			player_entered.emit(p)

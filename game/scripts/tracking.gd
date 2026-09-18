@@ -233,4 +233,7 @@ func _on_raw_frame(raw_bodies: Array, from_source: String) -> void:
 			parts.append("id=%s h=%.2f x=%.2f z=%.2f L=(%.2f,%.2f,%.2f)%s R=(%.2f,%.2f,%.2f)%s%s" % [
 				b.id, b.height, base.x, base.z, hl.x, hl.y, hl.z, "*" if b.hand_left == "tracked" else "",
 				hr.x, hr.y, hr.z, "*" if b.hand_right == "tracked" else "", " UP" if b.hands_up else ""])
-		print("tracklog t=%.1f n=%d  %s" % [last_packet_time, bodies.size(), "  |  ".join(parts)])
+		var rate := ""
+		if _pose_mode:
+			rate = " pose=%.0f/s %.0fms" % [BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms]
+		print("tracklog t=%.1f n=%d%s  %s" % [last_packet_time, bodies.size(), rate, "  |  ".join(parts)])

@@ -19,6 +19,7 @@ var velocity := Vector3.ZERO
 var tracking_confidence := 0.0
 var visible := false
 var last_seen := 0.0
+var first_seen := 0.0
 var standing_height := 0.0           # meters, median of recent head-to-feet readings
 var height_samples: Array[float] = []
 var is_crouching := false

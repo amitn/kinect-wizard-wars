@@ -75,13 +75,24 @@ change `MODEL_PATH` in the processor. CI does the same on the Windows and Linux 
 The model is not committed (13 MB, its own licence); the export preset includes `models/*.onnx`
 so a fetched model ships inside the `.pck`.
 
+## The color stream
+
+The first live run found no tracking at all, and the cause was upstream of the model: the camera's
+1280x720@30 RGB profile is advertised but delivers nothing on this Windows PC (Media Foundation refuses
+the native type; the SDK logs `SetNativeMediaType ... invalid in the current state`). 640x360@30 RGB
+streams at a steady 30 fps, so that is the default now (`OrbbecCamera.set_color_mode()` changes it,
+`get_color_profiles()` lists what the device offers, `game/probes/cam_modes_probe.gd` measures them).
+RTMPose crops to 192x256, so the smaller frame costs nothing; MediaPipe is fine with it too, and the
+depth-to-color alignment gets cheaper. With it the game reports `pose=30/s` at 9 to 17 ms.
+
 ## Checking it
 
 - The console prints `BodyTracker: RTMPose ready (in-extension, boxes from depth)` and the status
   line reads `RTMPose N poses/s`.
 - `--tracklog` prints one `rtm box ...` line a second per person with the mean and wrist scores.
 - `D` cycles the debug overlay; in the camera view the white rectangles are the candidate boxes.
-- `godot --headless --path game --script res://rtmpose_probe.gd` benchmarks inference on a synthetic blob.
+- `godot --headless --path game --script res://probes/rtmpose_probe.gd` benchmarks inference on a synthetic blob;
+  `probes/rtmpose_live_probe.gd` saves a real frame and scores it with both channel orders.
 
 ## What to watch with a real person
 

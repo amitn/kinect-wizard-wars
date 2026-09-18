@@ -4,9 +4,11 @@ extends RefCounted
 ## are tunable; distances in meters, speeds in meters per second.
 
 var push_speed := 1.2          # hand moving toward the camera (negative z velocity)
-var push_min_reach := 0.22     # hand must end up this far in front of the shoulders
-var push_travel := 0.22        # or: hand came this much closer to the camera within push_window
+var push_min_reach := 0.25     # hand must end up this far in front of the shoulders
+var push_travel := 0.25        # or: hand came this much closer to the camera within push_window
+var push_travel_speed := 0.5   # ...while still moving forward at least this fast
 var push_window := 0.35
+var settle_s := 0.6            # no gestures until a player has been tracked this long
 var punch_cooldown := 0.5
 var swipe_speed := 1.8         # sideways hand speed
 var swipe_min_travel := 0.45   # meters within the window
@@ -40,7 +42,9 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 	var shoulders := p.shoulder_center()
 	var head := p.head.position_3d
 	# Shorter players have shorter arms: scale the distance and speed thresholds.
-	var reach := clampf(p.standing_height / 1.7, 0.6, 1.1) if p.standing_height > 0.0 else 1.0
+	var reach := clampf(p.standing_height / 1.7, 0.75, 1.1) if p.standing_height > 0.0 else 1.0
+	# Fresh tracks have no history and jumpy first frames: let them settle.
+	var settled := now - p.first_seen >= settle_s
 
 	# Arms up: both wrists above the head.
 	p.arms_up = p.left_hand.valid and p.right_hand.valid \
@@ -66,8 +70,8 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		_push_hist[pkey] = phist
 		var travel: float = forward - phist[0][1] if phist.size() > 1 else 0.0
 		var fast := hand.velocity.z < -push_speed * reach
-		var travelled := travel > push_travel * reach
-		if (fast or travelled) and forward > push_min_reach * reach:
+		var travelled := travel > push_travel * reach and hand.velocity.z < -push_travel_speed * reach
+		if settled and (fast or travelled) and forward > push_min_reach * reach:
 			if _cool("%d:punch_%s" % [p.id, side], now, punch_cooldown):
 				fired.append("punch_" + side)
 				_push_hist[pkey] = []
@@ -81,7 +85,7 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		var at_chest := absf(hand.position_3d.y - shoulders.y) < 0.35 * reach and forward > 0.1 * reach
 		if hist.size() >= 3 and at_chest and absf(hand.velocity.x) > swipe_speed * reach:
 			var dx: float = hist[-1][1] - hist[0][1]
-			if absf(dx) > swipe_min_travel * reach and _cool("%d:swipe" % p.id, now, swipe_cooldown):
+			if settled and absf(dx) > swipe_min_travel * reach and _cool("%d:swipe" % p.id, now, swipe_cooldown):
 				fired.append("swipe_right" if dx > 0 else "swipe_left")
 				_swipe_hist[key] = []
 

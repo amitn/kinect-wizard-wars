@@ -68,6 +68,15 @@ public:
 	godot::Vector3 deproject_pixel(float x, float y, float depth_m) const;
 	/// Color intrinsics as [fx, fy, cx, cy] (aligned depth shares them).
 	godot::PackedFloat32Array get_intrinsics() const;
+	/// Diagnostics: every color profile the device offers, as "WxH@fps format".
+	godot::PackedStringArray get_color_profiles();
+	/// Pick the color mode used by the next start(): width/height/fps and the format
+	/// ("rgb", "mjpg", "yuyv", "any"). Defaults to 640x360@30 rgb.
+	void set_color_mode(int width, int height, int fps, const godot::String &format);
+	/// SDK log verbosity ("error", "warn", "info", "debug"); takes effect at the next start().
+	void set_sdk_log_level(const godot::String &level);
+	/// Frames the SDK delivered (any type), for rate diagnostics.
+	int get_frameset_count() const;
 	/// Bounding boxes, in color pixels, of the person-sized things standing
 	/// between near_m and far_m. This is what replaces the person detector a
 	/// top-down pose model normally needs: a depth camera already knows where
@@ -110,6 +119,14 @@ private:
 	uint64_t frames_received = 0;
 
 	int downsample = 2;
+	// 640x360 RGB streams reliably at 30 fps on this camera; 1280x720 RGB is
+	// advertised but delivers nothing on Windows (Media Foundation refuses the
+	// native type), and MJPG would need decoding. The pose model crops to
+	// 192x256 anyway, so 640x360 loses nothing that matters.
+	int want_color_w = 640, want_color_h = 360, want_color_fps = 30;
+	int want_color_format = 22;   // OB_FORMAT_RGB
+	int sdk_log_level = 3;        // OB_LOG_SEVERITY_ERROR
+	int frameset_count = 0;
 	BodyTracker tracker;
 	int tracked_count = 0;
 	bool debug_enabled = false;
