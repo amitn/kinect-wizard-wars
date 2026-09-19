@@ -81,9 +81,15 @@ func _on_players_updated(players: Array) -> void:
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	port = _port_from_cmdline()
-	var err := _udp.bind(port, "0.0.0.0")
+	# This PC only, unless asked: a port open to the network makes Windows Firewall
+	# question every player about a feature only developers use.
+	var listen := "127.0.0.1"
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--tracking-listen="):
+			listen = arg.get_slice("=", 1)   # 0.0.0.0 for a bridge on another machine
+	var err := _udp.bind(port, listen)
 	if err != OK:
-		push_error("Tracking: could not bind UDP port %d (error %d)" % [port, err])
+		push_error("Tracking: could not bind UDP port %d on %s (error %d)" % [port, listen, err])
 	else:
 		print("Tracking: listening for bridge frames on UDP port %d" % port)
 

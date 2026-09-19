@@ -195,7 +195,7 @@ python3 tools/mock_bridge.py --idle 2   # player 2 stands still
 godot --headless --path game --quit-after 3600   # prints casts and hits
 ```
 
-The game takes frames from the camera when one is present and from UDP otherwise. The status line at the bottom of the screen says which.
+The game takes frames from the camera when one is present and from UDP otherwise. The status line at the bottom of the screen says which. The UDP port listens on this PC only; `-- --tracking-listen=0.0.0.0` opens it to a bridge on another machine.
 
 ## Layout
 

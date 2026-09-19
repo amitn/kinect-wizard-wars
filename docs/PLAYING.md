@@ -80,4 +80,10 @@ fire wizard **Q** bolt, **W** wave, **E** shield, **A** heal; water wizard
 - *The wrong thing is tracked* - plants and coat racks can look like people to
   a camera. Move them, or stand closer than they are.
 
+## Your camera
+
+The picture is used to find your pose and then dropped, frame by frame, in
+memory. Nothing is recorded, stored or sent anywhere, and the game makes no
+network connections.
+
 Licences of the bundled components: `THIRD_PARTY_NOTICES.md`.
