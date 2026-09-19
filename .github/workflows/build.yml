@@ -68,13 +68,10 @@ jobs:
           Copy-Item $onnx.FullName game\models\rtmpose-t.onnx
           Get-Item game\models\rtmpose-t.onnx | Select-Object Length
 
-      - name: Build extension (release)
+      # One library serves debug and release alike (see game/orbbec.gdextension).
+      - name: Build extension
         working-directory: extension
         run: scons platform=windows target=template_release orbbec_sdk="$env:ORBBEC_SDK_DIR" onnxruntime="$env:ONNXRUNTIME_DIR" -j4
-
-      - name: Build extension (debug, for the editor)
-        working-directory: extension
-        run: scons platform=windows target=template_debug orbbec_sdk="$env:ORBBEC_SDK_DIR" onnxruntime="$env:ONNXRUNTIME_DIR" -j4
 
       - name: Download Godot and export templates
         shell: pwsh
@@ -214,11 +211,10 @@ jobs:
           tools/fetch_rtmpose_model.sh
           echo "ONNXRUNTIME_DIR=$GITHUB_WORKSPACE/third_party/onnxruntime-linux-x64" >> "$GITHUB_ENV"
 
-      - name: Build extension (release and debug)
+      - name: Build extension
         working-directory: extension
         run: |
           scons platform=linux target=template_release orbbec_sdk="$ORBBEC_SDK_DIR" onnxruntime="$ONNXRUNTIME_DIR" -j4
-          scons platform=linux target=template_debug orbbec_sdk="$ORBBEC_SDK_DIR" onnxruntime="$ONNXRUNTIME_DIR" -j4
           ls -l ../game/bin/linux
 
       - name: Download Godot and export templates

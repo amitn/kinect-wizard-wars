@@ -32,7 +32,7 @@ Players: **[how to play](docs/PLAYING.md)**. Ready-to-run Windows and Linux buil
 | Shield | Raise both hands above your head, hold    | 11/s | Blocks everything while held |
 | Heal   | Press both hands together at your chest for a second | 30 | Restores 18 health, once every 5 seconds |
 
-Mana regenerates at 12 per second. Health is 100. First to zero loses.
+Mana regenerates at 16 per second. Health is 100. First to zero loses.
 When the round is over, both players raise their hands together to rematch.
 
 Elemental edges:
