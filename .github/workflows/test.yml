@@ -46,6 +46,14 @@ jobs:
           echo "GODOT=$PWD/godot/Godot_v${v}-stable_linux.x86_64" >> "$GITHUB_ENV"
           "$PWD/godot/Godot_v${v}-stable_linux.x86_64" --version
 
+      # A synthetic player through the webcam (no depth) path: distance from body
+      # size, reach from foreshortening, and the gestures that must and must not fire.
+      - name: RGB-only tracking test
+        run: |
+          "$GODOT" --headless --path game --import
+          "$GODOT" --headless --path game --script res://tests/rgb_pose_test.gd -- --no-camera --no-save 2>&1 | tee rgb_test.log
+          grep -q "ALL PASSED" rgb_test.log
+
       - name: Start the mock tracking bridge
         run: |
           python3 -u tools/mock_bridge.py > mock.log 2>&1 &
@@ -139,9 +147,13 @@ jobs:
               exit 0
             fi
           fi
+          # udev sets the node's owner a moment after the module loads; wait for it,
+          # or it undoes the chmod. ffmpeg writes as root, the probe reads as the runner.
+          sudo udevadm settle || true
           sudo chmod 666 /dev/video42
-          ffmpeg -loglevel error -re -f lavfi -i "testsrc2=size=640x480:rate=30" -pix_fmt yuyv422 -f v4l2 /dev/video42 &
-          sleep 2
+          sudo ffmpeg -loglevel error -re -f lavfi -i "testsrc2=size=640x480:rate=30" -pix_fmt yuyv422 -f v4l2 /dev/video42 &
+          sleep 3
+          ls -l /dev/video42
           v="$GODOT_VERSION"
           curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${v}-stable/Godot_v${v}-stable_linux.x86_64.zip"
           unzip -q godot.zip -d godot

@@ -169,8 +169,8 @@ Gestures and their meaning (all thresholds are public vars on `BodyTracker.gestu
 
 | Gesture | Rule |
 |---|---|
-| `punch_left` / `punch_right` | hand moves toward the camera fast, or travels 22 cm closer within 0.35 s, and ends 22 cm in front of the shoulders |
-| `swipe_left` / `swipe_right` | hand at chest height, in front, moving sideways fast and travelling 45 cm within 0.4 s |
+| `punch_left` / `punch_right` | hand moves toward the camera fast, or travels 25 cm closer within 0.35 s, and ends 25 cm in front of the shoulders. Not while the hand is sweeping: an arm swept across the body points at the camera halfway through, so a hand at swipe speed with more sideways than forward travel is never a punch |
+| `swipe_left` / `swipe_right` | hand at chest height, in front, moving sideways fast and travelling 35 cm within 0.4 s. Reaching out to the side first is the wind-up and is ignored (a hand that starts clear of the body and moves further out), so the gesture fires on the stroke across the body |
 | `arms_up` | both wrists above the head (state, re-fires every 0.5 s) |
 | `hands_together` | wrists within 18 cm in 3D |
 | `jump` | body root rising faster than 1.2 m/s for several updates |
@@ -242,7 +242,13 @@ as they are and consume body frames.
 - Rendered screenshots: `godot --path game -- --screenshots=<dir> --shot-count=N --shot-interval=0.25 --shot-delay=S`
   writes PNGs on a timer; `--ko-at=T` knocks a player out T seconds into the fight for animation checks.
 - Movies: `--write-movie out.avi --fixed-fps 30 --quit-after 1200` renders every frame; encode with ffmpeg.
-- Unit test for the fallback tracker: `extension/tests/body_tracker_test.cpp` builds with plain g++.
+- Unit tests with plain g++: `extension/tests/body_tracker_test.cpp` (fallback tracker) and
+  `extension/tests/webcam_convert_test.cpp` (webcam pixel conversions).
+- `game/tests/rgb_pose_test.gd` walks a synthetic player through the no-depth path in real time:
+  distance from body size, reach from foreshortening, and which gestures a punch, a sweep with its
+  wind-up, raised hands and standing still must and must not fire. `--trace` prints every frame.
+  It is how gesture rules get changed without a person in front of a camera:
+  `godot --headless --path game --script res://tests/rgb_pose_test.gd -- --no-camera --no-save`.
 - Keyboard fallbacks: Wizard Wars maps casts to keys so the round logic is playable with no tracking at all. Do the same.
 
 ## 6. Shipping

@@ -24,8 +24,8 @@ var sensitivity := 1.0
 var forward_scale := 1.0
 
 var _last: Dictionary = {}     # "id:gesture" -> time
-var _swipe_hist: Dictionary = {}  # "id:side" -> Array of [t, x]
-var _push_hist: Dictionary = {}   # "id:side" -> Array of [t, forward]
+var _swipe_hist: Dictionary = {}  # "id:side" -> Array of [t, x, x relative to the shoulder centre]
+var _push_hist: Dictionary = {}   # "id:side" -> Array of [t, forward, x]
 var _streak: Dictionary = {}   # "id:state" -> consecutive updates the state held
 const STATE_PERSIST := 4       # updates a crouch/jump must hold before it counts
 
@@ -75,28 +75,40 @@ func update(p: TrackedPlayer, now: float) -> Array[String]:
 		# (robust against the smoothing filter damping the velocity).
 		var pkey := "%d:%s" % [p.id, side]
 		var phist: Array = _push_hist.get(pkey, [])
-		phist.append([now, forward])
+		phist.append([now, forward, hpos.x])
 		while phist.size() > 0 and now - phist[0][0] > push_window:
 			phist.pop_front()
 		_push_hist[pkey] = phist
 		var travel: float = forward - phist[0][1] if phist.size() > 1 else 0.0
+		var drift := 0.0   # sideways distance covered in the window, there and back counted
+		for i in range(1, phist.size()):
+			drift += absf(phist[i][2] - phist[i - 1][2])
 		var fast := hand.velocity.z < -push_speed * push_effort
 		var travelled := travel > push_travel * push_effort and hand.velocity.z < -push_travel_speed * push_effort
-		if settled and (fast or travelled) and forward > push_min_reach * push_effort:
+		# An arm swept across the body points at the camera halfway through, so a sweep
+		# has forward speed too. What it also has is more sideways travel than forward,
+		# at swipe speed: that is a wave, never a punch.
+		var sweeping := absf(hand.velocity.x) > swipe_speed * effort and drift > maxf(travel, 0.0)
+		if settled and (fast or travelled) and not sweeping and forward > push_min_reach * push_effort:
 			if _cool("%d:punch_%s" % [p.id, side], now, punch_cooldown):
 				fired.append("punch_" + side)
 				_push_hist[pkey] = []
 		# Swipe: sideways travel over the last 0.4 s at chest height, in front of the body.
 		var key := "%d:%s" % [p.id, side]
 		var hist: Array = _swipe_hist.get(key, [])
-		hist.append([now, hpos.x])
+		hist.append([now, hpos.x, hpos.x - shoulders.x])
 		while hist.size() > 0 and now - hist[0][0] > 0.4:
 			hist.pop_front()
 		_swipe_hist[key] = hist
 		var at_chest := absf(hpos.y - shoulders.y) < 0.4 * reach and forward > -0.05
 		if hist.size() >= 3 and at_chest and absf(hand.velocity.x) > swipe_speed * effort:
 			var dx: float = hist[-1][1] - hist[0][1]
-			if settled and absf(dx) > swipe_min_travel * effort and _cool("%d:swipe" % p.id, now, swipe_cooldown):
+			# Reaching out to the side is the wind-up, not the sweep: a hand that starts
+			# clear of the body and moves further out is ignored, so the wave is released
+			# by the stroke across the body that follows.
+			var start_side: float = hist[0][2]
+			var winding_up := absf(start_side) > 0.15 * reach and signf(dx) == signf(start_side)
+			if settled and not winding_up and absf(dx) > swipe_min_travel * effort and _cool("%d:swipe" % p.id, now, swipe_cooldown):
 				fired.append("swipe_right" if dx > 0 else "swipe_left")
 				_swipe_hist[key] = []
 

@@ -373,23 +373,36 @@ private:
 			release(native);
 		}
 
+		// A camera whose smallest mode is still large (some only do 1080p and up) would
+		// cost a 6 MB copy per frame for a pose model that looks at 256x192: ask the
+		// reader's video processor to scale it down. Refused? The native size is next.
+		UINT64 scaled_size = 0;
+		UINT32 native_w = 0, native_h = 0;
+		unpack(native_size, native_w, native_h);
+		if (native_w > 1280 && native_h > 0) {
+			const UINT32 w = 960;
+			const UINT32 h = (static_cast<UINT32>(static_cast<UINT64>(native_h) * w / native_w) + 1u) & ~1u;
+			scaled_size = (static_cast<UINT64>(w) << 32) | h;
+		}
+
 		// RGB32 first; the two YUV layouts cover a Windows whose video processor is missing.
 		const GUID outputs[] = { MFVideoFormat_RGB32, MFVideoFormat_YUY2, MFVideoFormat_NV12 };
 		bool configured = false;
 		for (const GUID &subtype : outputs) {
-			for (int with_size = 1; with_size >= 0 && !configured; with_size--) {
+			// 2: scaled down, 1: the native size, 0: whatever the reader picks.
+			for (int with_size = 2; with_size >= 0 && !configured; with_size--) {
+				const UINT64 size = with_size == 2 ? scaled_size : (with_size == 1 ? native_size : 0);
+				if (with_size > 0 && size == 0) {
+					continue;
+				}
 				IMFMediaType *wanted = nullptr;
 				if (FAILED(api.CreateMediaType(&wanted))) {
 					continue;
 				}
 				wanted->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
 				wanted->SetGUID(MF_MT_SUBTYPE, subtype);
-				if (with_size == 1) {
-					if (native_size == 0) {
-						release(wanted);
-						continue;
-					}
-					wanted->SetUINT64(MF_MT_FRAME_SIZE, native_size);
+				if (with_size > 0) {
+					wanted->SetUINT64(MF_MT_FRAME_SIZE, size);
 					if (native_rate != 0) {
 						wanted->SetUINT64(MF_MT_FRAME_RATE, native_rate);
 					}

@@ -1,7 +1,7 @@
 extends SceneTree
 ## Lists the webcams and grabs a second of frames from each (or from --device=N):
 ##
-##   godot --headless --path game --script res://probes/webcam_probe.gd -- --no-camera [--device=N] [--out=<dir>] [--require]
+##   godot --headless --path game --script res://probes/webcam_probe.gd -- --no-camera [--device=N] [--mode=WxH] [--out=<dir>] [--require]
 ##
 ## --out saves the last frame of every camera as webcam_<n>.png. --require makes
 ## the exit code 1 unless a camera delivered real (not black) frames, which is
@@ -12,6 +12,7 @@ func _init() -> void:
 	var only := -1
 	var required := false
 	var seconds := 1.5
+	var mode := Vector2i.ZERO
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--out="):
 			out_dir = arg.get_slice("=", 1)
@@ -19,6 +20,10 @@ func _init() -> void:
 			only = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--seconds="):
 			seconds = float(arg.get_slice("=", 1))
+		elif arg.begins_with("--mode="):
+			var wh := arg.get_slice("=", 1).split("x")
+			if wh.size() == 2:
+				mode = Vector2i(int(wh[0]), int(wh[1]))
 		elif arg == "--require":
 			required = true
 	if not ClassDB.class_exists("WebcamCamera"):
@@ -35,6 +40,8 @@ func _init() -> void:
 		if only >= 0 and i != only:
 			continue
 		cam.set_device(i)
+		if mode != Vector2i.ZERO:
+			cam.set_mode(mode.x, mode.y, 30)
 		var t0 := Time.get_ticks_msec()
 		if not cam.start():
 			print("  [%d] start failed: %s" % [i, cam.get_last_error()])
