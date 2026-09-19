@@ -10,7 +10,7 @@ signal restart_requested()
 const ACCENT := Color(0.62, 0.45, 1.0)
 const TEXT := Color(0.9, 0.9, 1.0)
 const CAMERA_LABELS := {
-	Settings.CAMERA_AUTO: "Auto  (depth camera if connected, else webcam)",
+	Settings.CAMERA_AUTO: "Auto  (depth camera, else a webcam)",
 	Settings.CAMERA_DEPTH: "RGB + depth  (Orbbec Gemini 2)",
 	Settings.CAMERA_RGB: "RGB  (any webcam)",
 }
