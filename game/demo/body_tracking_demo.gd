@@ -1,5 +1,5 @@
 extends Control
-## Body tracking debug scene: the Gemini color image with MediaPipe skeletons,
+## Body tracking debug scene: the camera's color image with the tracked skeletons,
 ## per-joint depth and XYZ, velocities, player ids, and performance numbers.
 ## Run with:  godot --path game res://demo/body_tracking_demo.tscn
 ## In the game: press T.
@@ -47,8 +47,13 @@ func _draw() -> void:
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.05, 0.05, 0.08))
 	var view := Rect2(Vector2(20, 60), Vector2(1280, 720))
 	if _tex != null:
-		# Mirrored, like the game.
-		draw_texture_rect(_tex, Rect2(view.position + Vector2(view.size.x, 0), Vector2(-view.size.x, view.size.y)), false)
+		# A webcam is usually 4:3: keep the height and let the width follow the camera.
+		view.size.x = minf(1280.0, 720.0 * _tex.get_width() / float(_tex.get_height()))
+		# Mirrored, like the game. Flipped with the transform: a negative-size rect
+		# flips the texture but is not mirrored in place.
+		draw_set_transform(Vector2(view.end.x, view.position.y), 0.0, Vector2(-1.0, 1.0))
+		draw_texture_rect(_tex, Rect2(Vector2.ZERO, view.size), false)
+		draw_set_transform(Vector2.ZERO)
 	else:
 		draw_rect(view, Color(0.1, 0.1, 0.14))
 		draw_string(font, view.position + Vector2(20, 40), "no color frames yet", HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color(1, 0.6, 0.6))

@@ -7,6 +7,8 @@ var mode: int = Mode.OFF:
 	set(v):
 		mode = v
 		Tracking.set_camera_debug(mode == Mode.FULL)
+		if _pose_view != null:
+			_pose_view.visible = mode == Mode.FULL
 var enabled: bool:
 	get: return mode != Mode.OFF
 	set(v): mode = Mode.FULL if v else Mode.OFF
@@ -15,20 +17,19 @@ var enabled: bool:
 func cycle() -> void:
 	mode = (mode + 1) % 3
 var _cam_tex: ImageTexture = null
-var _color_tex: ImageTexture = null
-var _last_color_id := -1
+var _pose_view: CameraView = null   # the color image with skeletons, bottom-left (full mode only)
 var wizards: Array = []   # set by Main: the Wizard nodes, to draw the mapped joints over them
-
-const MP_BONES := [
-	[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24],
-	[23, 25], [25, 27], [24, 26], [26, 28], [27, 31], [28, 32], [15, 19], [16, 20], [0, 11], [0, 12],
-]
-const PLAYER_COLORS := [Color(1.0, 0.55, 0.15), Color(0.35, 0.7, 1.0), Color(0.6, 1.0, 0.5)]
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_process(true)
+	_pose_view = CameraView.new()
+	_pose_view.detailed = true
+	_pose_view.position = Vector2(20, 1080 - 400)
+	_pose_view.size = Vector2(640, 360)
+	_pose_view.visible = false
+	add_child(_pose_view)
 
 
 func _process(_delta: float) -> void:
@@ -40,52 +41,11 @@ func _draw() -> void:
 	if not enabled:
 		return
 	var font := ThemeDB.fallback_font
-	# Pose view: the color image with MediaPipe skeletons, bottom-left (full mode only).
-	var pose_drawn := false
-	var cam := BodyTracker.camera
-	if mode == Mode.FULL and cam != null and cam.is_running() and BodyTracker.processor.available:
-		var fid: int = cam.get_color_frame_id()
-		if fid != _last_color_id:
-			_last_color_id = fid
-			var img: Image = cam.get_color_image()
-			if img != null:
-				if _color_tex == null or _color_tex.get_size() != Vector2(img.get_size()):
-					_color_tex = ImageTexture.create_from_image(img)
-				else:
-					_color_tex.update(img)
-		if _color_tex != null:
-			var pose_rect := Rect2(Vector2(20, 1080 - 400), Vector2(640, 360))
-			draw_rect(pose_rect.grow(4), Color(0, 0, 0, 0.7))
-			# Mirrored, like the game: draw the texture flipped and mirror the joint x.
-			draw_texture_rect(_color_tex, Rect2(pose_rect.position + Vector2(pose_rect.size.x, 0), Vector2(-pose_rect.size.x, pose_rect.size.y)), false)
-			var sc := pose_rect.size / Vector2(_color_tex.get_size())
-			for p in BodyTracker.players:
-				if not p.visible:
-					continue
-				var col: Color = PLAYER_COLORS[(p.id - 1) % PLAYER_COLORS.size()]
-				var pts: Array = []
-				for jn in TrackedPlayer.JOINT_NAMES:
-					var ip: Vector2 = p.joints[jn].image_position * sc
-					pts.append(pose_rect.position + Vector2(pose_rect.size.x - ip.x, ip.y))
-				for b in MP_BONES:
-					var ja: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[0]]]
-					var jb: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[b[1]]]
-					draw_line(pts[b[0]], pts[b[1]], col if (ja.valid and jb.valid) else Color(col, 0.3), 2.0, true)
-				for i in pts.size():
-					var j: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[i]]
-					draw_circle(pts[i], 3.0, Color(1, 1, 0.3) if j.depth_inferred else (col if j.valid else Color(1, 0.3, 0.3)))
-				for i in [15, 16, 0]:
-					var j: TrackedJoint = p.joints[TrackedPlayer.JOINT_NAMES[i]]
-					draw_string(font, pts[i] + Vector2(5, -3), "z%.2f" % j.position_3d.z, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
-				draw_string(font, pts[0] + Vector2(-30, -22), "P%d %.2f" % [p.id, p.tracking_confidence], HORIZONTAL_ALIGNMENT_LEFT, -1, 14, col)
-			if BodyTracker.processor is RtmPoseProcessor:
-				for b in BodyTracker.processor.last_boxes:
-					var r: Rect2 = b
-					var bx := pose_rect.position.x + pose_rect.size.x - (r.position.x + r.size.x) * sc.x
-					draw_rect(Rect2(Vector2(bx, pose_rect.position.y + r.position.y * sc.y), r.size * sc), Color(1, 1, 1, 0.5), false, 1.0)
-			draw_rect(pose_rect, Color(0.6, 0.9, 1.0, 0.8), false, 2.0)
-			draw_string(font, pose_rect.position + Vector2(6, -6), "POSE  %.0f/s  %.0f ms   yellow = depth carried over, red = low confidence" % [BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms], HORIZONTAL_ALIGNMENT_LEFT, 640, 14, Color(0.8, 0.95, 1.0))
-			pose_drawn = true
+	# Pose view (a CameraView child) whenever a pose model is running.
+	var pose_drawn: bool = mode == Mode.FULL and BodyTracker.camera != null and BodyTracker.processor.available
+	_pose_view.visible = pose_drawn
+	if pose_drawn:
+		_pose_view.caption = "POSE  %.0f/s  %.0f ms   yellow = depth carried over, red = low confidence" % [BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms]
 
 	# Mapped joints over the wizards in the arena: what the game actually uses.
 	for w in wizards:

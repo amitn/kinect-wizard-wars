@@ -26,6 +26,10 @@ jobs:
       - name: Install SCons
         run: pip install scons
 
+      - name: Stamp the version
+        shell: bash
+        run: tools/ci_set_version.sh
+
       - name: Download Orbbec SDK
         shell: pwsh
         run: |
@@ -84,6 +88,17 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dest | Out-Null
           Copy-Item templates\templates\* $dest -Recurse -Force
 
+      # Godot sets the exe's icon and version info through rcedit, found via the editor settings.
+      - name: Set up rcedit
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile rcedit-x64.exe
+          $rcedit = (Resolve-Path rcedit-x64.exe).Path.Replace('\', '/')
+          New-Item -ItemType Directory -Force -Path "$env:APPDATA\Godot" | Out-Null
+          $lines = @('[gd_resource type="EditorSettings" format=3]', '', '[resource]', "export/windows/rcedit = `"$rcedit`"")
+          Set-Content -Path "$env:APPDATA\Godot\editor_settings-4.4.tres" -Value $lines
+          Get-Content "$env:APPDATA\Godot\editor_settings-4.4.tres"
+
       - name: Export Windows build
         shell: pwsh
         run: |
@@ -93,15 +108,20 @@ jobs:
           & $godot --headless --path game --export-release "Windows Desktop" "$PWD\dist\WizardWars.exe"
           if (-not (Test-Path dist\WizardWars.exe)) { throw "export failed" }
 
-      - name: Stage Orbbec runtime next to the exe
+      - name: Stage the runtime, the guide and the licences next to the exe
         shell: pwsh
         run: |
           Copy-Item "$env:ORBBEC_SDK_DIR\bin\OrbbecSDK.dll" dist -Force
           Copy-Item "$env:ONNXRUNTIME_DIR\lib\onnxruntime.dll" dist -Force
           Copy-Item "$env:ONNXRUNTIME_DIR\lib\onnxruntime_providers_shared.dll" dist -Force
           Copy-Item "$env:ORBBEC_SDK_DIR\bin\extensions" dist\extensions -Recurse -Force
-          Copy-Item tools\mock_bridge.py dist -Force
-          Copy-Item README.md dist -Force
+          Copy-Item docs\PLAYING.md dist\HOW_TO_PLAY.md -Force
+          Copy-Item THIRD_PARTY_NOTICES.md dist -Force
+          New-Item -ItemType Directory -Force -Path dist\licenses\orbbec, dist\licenses\onnxruntime | Out-Null
+          Copy-Item licenses\* dist\licenses -Force
+          Copy-Item "$env:ORBBEC_SDK_DIR\LICENSE.txt" dist\licenses\orbbec -Force
+          if (Test-Path "$env:ORBBEC_SDK_DIR\licenses") { Copy-Item "$env:ORBBEC_SDK_DIR\licenses\*" dist\licenses\orbbec -Recurse -Force }
+          Copy-Item "$env:ONNXRUNTIME_DIR\LICENSE", "$env:ONNXRUNTIME_DIR\ThirdPartyNotices.txt" dist\licenses\onnxruntime -Force
           Get-ChildItem dist -Recurse | Select-Object FullName, Length
 
       - name: Smoke test the exported exe
@@ -111,10 +131,45 @@ jobs:
           Write-Host $log
           if ($log -notmatch "OrbbecCamera extension") { throw "extension did not load in the exported build" }
 
+      # Smart App Control refuses any unsigned exe, and Godot's export templates are
+      # unsigned. The editor binary is signed and runs a .pck named after it, so the
+      # same game is also packaged that way: WizardWars.exe here is that binary, renamed.
+      - name: Build the signed-runner package
+        shell: pwsh
+        run: |
+          $godot = (Get-ChildItem godot -Filter "Godot_v*_win64_console.exe" | Select-Object -First 1).FullName
+          $signed = (Get-ChildItem godot -Filter "Godot_v*_win64.exe" | Select-Object -First 1).FullName
+          New-Item -ItemType Directory -Force -Path dist-signed | Out-Null
+          & $godot --headless --path game --export-pack "Windows Desktop" "$PWD\dist-signed\WizardWars.pck"
+          if (-not (Test-Path dist-signed\WizardWars.pck)) { throw "pack export failed" }
+          Copy-Item $signed dist-signed\WizardWars.exe
+          Copy-Item dist\*.dll, dist\*.md dist-signed -Force
+          Copy-Item dist\extensions dist-signed\extensions -Recurse -Force
+          Copy-Item dist\licenses dist-signed\licenses -Recurse -Force
+          $signature = Get-AuthenticodeSignature dist-signed\WizardWars.exe
+          Write-Host "runner signature: $($signature.Status) - $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne "Valid") { throw "the Godot binary is not validly signed, so this package would not help anyone" }
+          Get-ChildItem dist-signed | Select-Object Name, Length
+
+      - name: Smoke test the signed-runner package
+        shell: pwsh
+        run: |
+          $log = "$env:APPDATA\Godot\app_userdata\Wizard Wars\logs\godot.log"
+          Remove-Item $log -ErrorAction SilentlyContinue
+          $run = Start-Process -FilePath dist-signed\WizardWars.exe -ArgumentList "--headless", "--quit-after", "60", "--", "--no-save" -PassThru -Wait
+          Write-Host "exit code $($run.ExitCode)"
+          Get-Content $log
+          if (-not (Select-String -Path $log -Pattern "OrbbecCamera extension loaded" -Quiet)) { throw "extension did not load in the signed-runner package" }
+
       - uses: actions/upload-artifact@v4
         with:
           name: WizardWars-windows-x64
           path: dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WizardWars-windows-x64-signed-runner
+          path: dist-signed
 
   linux:
     runs-on: ubuntu-latest
@@ -129,6 +184,9 @@ jobs:
 
       - name: Install SCons
         run: pip install scons
+
+      - name: Stamp the version
+        run: tools/ci_set_version.sh
 
       - name: Download Orbbec SDK
         run: |
@@ -181,12 +239,19 @@ jobs:
           "$GODOT" --headless --path game --export-release "Linux" "$PWD/dist/WizardWars.x86_64"
           test -f dist/WizardWars.x86_64
 
-      - name: Stage Orbbec runtime next to the binary
+      - name: Stage the runtime, the guide and the licences next to the binary
         run: |
           cp orbbec_sdk/lib/libOrbbecSDK.so* dist/
           cp "$ONNXRUNTIME_DIR"/lib/libonnxruntime.so* dist/
           cp -r orbbec_sdk/lib/extensions dist/extensions
-          cp tools/mock_bridge.py README.md dist/
+          cp docs/PLAYING.md dist/HOW_TO_PLAY.md
+          cp THIRD_PARTY_NOTICES.md dist/
+          mkdir -p dist/licenses/orbbec dist/licenses/onnxruntime
+          cp licenses/* dist/licenses/
+          cp orbbec_sdk/LICENSE.txt dist/licenses/orbbec/
+          if [ -d orbbec_sdk/licenses ]; then cp -r orbbec_sdk/licenses/* dist/licenses/orbbec/; fi
+          cp "$ONNXRUNTIME_DIR"/LICENSE "$ONNXRUNTIME_DIR"/ThirdPartyNotices.txt dist/licenses/onnxruntime/
+          cp orbbec_sdk/shared/99-obsensor-libusb.rules dist/ 2>/dev/null || true
           ls -l dist
 
       - name: Smoke test the exported binary
@@ -200,3 +265,38 @@ jobs:
         with:
           name: WizardWars-linux-x64
           path: dist
+
+  # A `v*` tag turns the three packages into a draft release: nothing is public
+  # until somebody reads it over on GitHub and presses Publish.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package
+        run: |
+          v="$GITHUB_REF_NAME"
+          cd artifacts
+          (cd WizardWars-windows-x64 && zip -qr "../WizardWars-$v-windows-x64.zip" .)
+          (cd WizardWars-windows-x64-signed-runner && zip -qr "../WizardWars-$v-windows-x64-signed-runner.zip" .)
+          chmod +x WizardWars-linux-x64/WizardWars.x86_64   # artifacts drop the executable bit
+          tar -czf "WizardWars-$v-linux-x64.tar.gz" -C WizardWars-linux-x64 .
+          sha256sum WizardWars-*.zip WizardWars-*.tar.gz > SHA256SUMS.txt
+          ls -l
+
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "Wizard Wars $GITHUB_REF_NAME" \
+            --notes-file docs/RELEASE_NOTES_HEADER.md --generate-notes \
+            artifacts/WizardWars-*.zip artifacts/WizardWars-*.tar.gz artifacts/SHA256SUMS.txt

@@ -1,6 +1,7 @@
 #include "register_types.h"
 
 #include "orbbec_camera.h"
+#include "webcam_camera.h"
 #ifdef HAVE_ONNXRUNTIME
 #include "rtmpose.h"
 #endif
@@ -14,6 +15,7 @@ void initialize_orbbec_module(godot::ModuleInitializationLevel p_level) {
 		return;
 	}
 	GDREGISTER_CLASS(wizardwars::OrbbecCamera);
+	GDREGISTER_CLASS(wizardwars::WebcamCamera);
 #ifdef HAVE_ONNXRUNTIME
 	GDREGISTER_CLASS(RtmPose);
 #endif

@@ -43,8 +43,16 @@ var _result_times: Array[float] = []
 var _last_depth: Dictionary = {}   # "pose_index:joint" -> [depth, time]
 
 
+## Points the landmarker at another camera, or at none, keeping the loaded task.
+func set_camera(camera: Node) -> void:
+	_camera = camera
+	_sent_frame_id = -1
+
+
 func setup(camera: Node) -> bool:
 	_camera = camera
+	if _task != null:
+		return available   # the task outlives a camera change
 	if not ClassDB.class_exists("MediaPipePoseLandmarker"):
 		last_error = "GDMP extension not loaded"
 		return false
@@ -116,6 +124,8 @@ func _fuse_and_emit(raw_people: Array, timestamp_ms: int) -> void:
 		_result_times.pop_front()
 	poses_per_second = _result_times.size() / 2.0
 
+	if _camera == null:
+		return   # the camera went away while this frame was in flight
 	var w: int = _camera.get_color_width()
 	var h: int = _camera.get_color_height()
 	if w == 0 or h == 0:

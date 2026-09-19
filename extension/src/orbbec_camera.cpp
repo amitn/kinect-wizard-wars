@@ -75,6 +75,7 @@ void OrbbecCamera::_bind_methods() {
 	godot::ClassDB::bind_method(D_METHOD("get_tracked_body_count"), &OrbbecCamera::get_tracked_body_count);
 	godot::ClassDB::bind_method(D_METHOD("get_last_error"), &OrbbecCamera::get_last_error);
 	godot::ClassDB::bind_method(D_METHOD("get_device_name"), &OrbbecCamera::get_device_name);
+	godot::ClassDB::bind_method(D_METHOD("has_depth"), &OrbbecCamera::has_depth);
 	godot::ClassDB::bind_method(D_METHOD("get_depth_width"), &OrbbecCamera::get_depth_width);
 	godot::ClassDB::bind_method(D_METHOD("get_depth_height"), &OrbbecCamera::get_depth_height);
 	godot::ClassDB::bind_method(D_METHOD("set_debug_enabled", "enabled"), &OrbbecCamera::set_debug_enabled);

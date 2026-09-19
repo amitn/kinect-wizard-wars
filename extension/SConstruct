@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Builds the OrbbecCamera GDExtension (and RtmPose when ONNX Runtime is given).
+"""Builds the OrbbecCamera + WebcamCamera GDExtension (and RtmPose when ONNX Runtime is given).
 
     cd extension
     scons platform=windows target=template_release orbbec_sdk=C:/path/to/OrbbecSDK_v2.x_win_x64 onnxruntime=C:/path/to/onnxruntime-win-x64
@@ -32,7 +32,11 @@ env.Append(LIBPATH=[os.path.join(sdk, "lib")])
 env.Append(LIBS=["OrbbecSDK"])
 if env["platform"] == "linux":
     env.Append(LINKFLAGS=["-Wl,-rpath,'$$ORIGIN'"])
-    env.Append(LIBS=["dl"])
+    env.Append(LIBS=["dl", "pthread"])
+elif env["platform"] == "windows":
+    # COM for the webcam backend. Media Foundation itself is loaded at run time
+    # (see webcam_backend_win.cpp), so a PC without it still loads the extension.
+    env.Append(LIBS=["ole32"])
 
 sources = Glob("src/*.cpp")
 

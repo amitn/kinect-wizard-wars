@@ -1,7 +1,7 @@
 # Building camera games on this pipeline
 
 This document explains the architecture behind Wizard Wars so the same pipeline can drive other
-games with the Orbbec Gemini 2. It covers the layers, the contracts between them, what to reuse
+games with the Orbbec Gemini 2 - or with a plain webcam, which the same layers accept. It covers the layers, the contracts between them, what to reuse
 as-is, what to copy and adapt, how to test without a camera, how to ship, and the lessons from
 real sessions. Read it top to bottom once; afterwards the "Recipe for a new game" section is
 enough.
@@ -9,18 +9,22 @@ enough.
 ## 1. The stack in one picture
 
 ```
-Orbbec Gemini 2 (USB 3)
-   │  color 1280x720 @30 + depth 640x400 @30, depth aligned to color inside the extension
-   ▼
-extension/  OrbbecCamera (C++ GDExtension, godot-cpp 4.3, OrbbecSDK v2)
-   │  get_color_image(), get_depth_at(x, y, r), deproject_pixel(x, y, z), frame ids, intrinsics
-   │  + a depth-only blob tracker (fallback) that emits Kinect-style body frames
+Orbbec Gemini 2 (USB 3)                                      any webcam
+   │  color 640x360 @30 + depth 640x400 @30,                    │  640x480 @30 through Media Foundation
+   │  depth aligned to color inside the extension               │  (Windows) or V4L2 (Linux)
+   ▼                                                            ▼
+extension/  OrbbecCamera (OrbbecSDK v2)                      extension/  WebcamCamera
+   │  get_color_image(), get_depth_at(x, y, r),                 │  the same color interface; has_depth() is
+   │  deproject_pixel(x, y, z), frame ids, intrinsics           │  false, depth queries answer 0, intrinsics
+   │  + a depth-only blob tracker (fallback)                    │  come from an assumed field of view
+   ▼                                                            ▼
+game/scripts/settings.gd  autoload Settings: "auto" | "depth" | "rgb", which webcam, persisted
    ▼
 extension/  RtmPose (C++, ONNX Runtime C API): crop -> 17 COCO keypoints, ~6.6 ms a person
 game/addons/GDMP  MediaPipe Pose Landmarker inside Godot (fallback, Godot 4.4+)
    ▼
 game/tracking/  (GDScript, reusable as a whole)
-   RtmPoseProcessor     color frame + depth boxes -> RTMPose -> depth fusion -> camera-space XYZ
+   RtmPoseProcessor     color frame -> RTMPose -> depth fusion, or size-based distance without depth -> camera-space XYZ
    PoseProcessor        the MediaPipe equivalent (fallback), same output
    PlayerIdentityTracker stable Player 1 / Player 2 ids
    PoseFilter           One Euro smoothing per joint
@@ -85,6 +89,34 @@ Build: `cd extension && scons platform=windows target=template_release orbbec_sd
 (MSVC on Windows, or llvm-mingw cross-build from Linux; see the README). The SConstruct copies
 `OrbbecSDK.dll` and the SDK's `extensions/` folder next to the built DLL. Both must ship with the game.
 
+### 3.1b WebcamCamera (`extension/src/webcam_camera.cpp`)
+
+The same node for a camera without depth. It answers the color half of `OrbbecCamera`'s interface
+(`start`, `stop`, `is_running`, `get_color_image`, `get_color_frame_id`, `get_timestamp`,
+`get_intrinsics`, `deproject_pixel`, `get_last_error`, `get_device_name`) plus `list_devices()`,
+`set_device(index)`, `set_mode(w, h, fps)`, `set_horizontal_fov(deg)`. `has_depth()` tells the two
+apart (`OrbbecCamera` has it too, returning true); `get_depth_at` and `get_depth_percentile` return 0.
+
+Capture is a small backend per platform behind `webcam_backend.h`, delivering RGB8 (or a complete
+JPEG for MJPG cameras, decoded on the main thread) from its own thread:
+
+- **Windows**: Media Foundation's source reader, RGB32 out. The three MF DLLs are loaded at run time
+  and `<initguid.h>` defines the GUIDs in that one file, so the extension links nothing new and still
+  loads on a Windows without Media Foundation.
+- **Linux**: V4L2, memory-mapped, YUYV first and MJPG second (with the standard Huffman tables put
+  back, which UVC cameras are allowed to omit). CI tests it against `v4l2loopback` fed by ffmpeg.
+
+`game/probes/webcam_probe.gd` lists the cameras and measures each:
+`godot --headless --path game --script res://probes/webcam_probe.gd -- --no-camera --out=<dir>`.
+
+**Without depth**, `RtmPoseProcessor._person_from_size()` stands in for the depth image: distance is
+`focal * L / pixels` for body segments of reference length L (the second longest reading, since
+foreshortening only ever shortens), every joint sits on that plane, and each arm segment reaches
+`sqrt(L^2 - seen^2)` toward the lens, which is what gives a webcam player a punch. `GestureDetector`
+reads the result exactly as it reads real depth; `BodyTracker` only lowers `forward_scale`, because
+inferred reach reads short. A player whose hips are out of view (close, or at a desk) is measured by
+shoulder width alone and accepted on a confident face and shoulders.
+
 ### 3.2 RtmPose (`extension/src/rtmpose.cpp`)
 
 The pose model, in the extension. `initialize(model_bytes, threads)`, `infer(image, box)` returning
@@ -108,7 +140,10 @@ Copy the folder unchanged into a new project and register `BodyTracker` as an au
 BodyTracker.players            # Array[TrackedPlayer] sorted by id
 BodyTracker.player_count
 BodyTracker.get_player(0)      # Player 1 or null
-BodyTracker.camera             # the OrbbecCamera node (null without the extension)
+BodyTracker.camera             # the camera in use: OrbbecCamera or WebcamCamera, null until one starts
+BodyTracker.camera_kind        # "depth", "rgb" or ""
+BodyTracker.describe_camera()  # "Orbbec Gemini 2 (RGB + depth)", "Surface Camera Front (RGB)"
+BodyTracker.list_webcams()     # names for a settings menu; BodyTracker.rescan() looks again
 BodyTracker.status             # human-readable state for a HUD
 BodyTracker.camera_fps, BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms
 
@@ -118,6 +153,7 @@ signal tracking_started()
 signal tracking_lost()
 signal gesture(player, gesture_name)
 signal players_updated(players)
+signal camera_changed()        # another device, another kind, or none: never cache BodyTracker.camera
 ```
 
 `TrackedPlayer`: `id`, `position` (hips centre, torso depth), `velocity`, `standing_height`,
@@ -211,19 +247,32 @@ as they are and consume body frames.
 
 ## 6. Shipping
 
-`.github/workflows/build.yml` produces `WizardWars-windows-x64` and `WizardWars-linux-x64` on every
-push: it downloads the Orbbec SDK and Godot, builds the extension, exports the project, copies the SDK
-runtime (`OrbbecSDK.dll` and `extensions/`) next to the binary, and runs the binary headless to check
-the extension loads. `test.yml` runs the tracker unit test and a headless mock round. Rename the
-artifact and the export path for a new game and the workflows carry over.
+`.github/workflows/build.yml` produces `WizardWars-windows-x64`, `WizardWars-windows-x64-signed-runner`
+and `WizardWars-linux-x64` on every push: it downloads the Orbbec SDK, ONNX Runtime, the pose model
+and Godot, builds the extension, exports the project, copies the runtime (`OrbbecSDK.dll`,
+`extensions/`, `onnxruntime.dll`), the player guide and the licence files next to the binary, and runs
+the binary headless to check the extension loads. A `v*` tag also runs the `release` job, which zips
+the packages into a **draft** GitHub release; the tag is the version (`tools/ci_set_version.sh`).
+`test.yml` runs the unit tests, a headless mock round and the webcam backend against a loopback
+camera. Rename the artifact and the export path for a new game and the workflows carry over.
+
+What a published build needs beyond "it runs": a settings menu with the camera choice and a live
+preview (`settings_menu.gd`, `camera_view.gd`: players cannot debug a camera they cannot see), a
+fullscreen default with `--windowed` for development, an icon (`tools/make_icon.gd`), exe metadata
+(rcedit, set up in CI), a guide written for players (`docs/PLAYING.md`), and
+`THIRD_PARTY_NOTICES.md` with the licence files of everything bundled.
 
 Runtime facts to keep in mind:
 
 - The camera must be on a **USB 3** port. Nothing else to install on Windows: the SDK is user-mode.
 - On a **Windows on ARM** PC the x64 build runs under emulation and the camera works; MediaPipe runs
   at roughly 20 poses per second on CPU there.
-- **Smart App Control** blocks unsigned exports. Either sign the exe, turn Smart App Control off, or
-  run the project folder through the signed Godot editor binary (`Godot_v4.4.1-stable_win64_console.exe --path <project>`).
+- **Smart App Control** blocks unsigned exports, and Godot's export templates are unsigned. The
+  official editor binary is signed and runs a `.pck` named after it, so the signed-runner package
+  (that binary renamed `WizardWars.exe`, plus `WizardWars.pck` from `--export-pack`, plus the DLLs)
+  starts with a double click where the export is refused. A code-signing certificate fixes the export itself.
+- **Webcams on Windows** need "Let desktop apps access your camera" in the privacy settings; the
+  backend turns the access-denied error into that sentence.
 - If the game reports "No device found" while the camera is plugged in, check `usbipd list`: a camera
   attached to WSL is invisible to Windows until detached.
 - Export presets must include `models/*.task`; the gdextension `[dependencies]` entries copy the SDK DLL.

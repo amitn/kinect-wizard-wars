@@ -6,10 +6,10 @@ extends Node2D
 ##   Water wizard: I bolt   O wave   P toggle shield   K heal
 ##   Enter start a round with untracked players, R restart, B re-learn the empty room,
 ##   D cycle the debug overlay (skeleton, skeleton + camera, off), T open the body tracking demo scene.
+##   Esc opens the settings menu (camera, mirror, sensitivity, fullscreen, quit), F11 toggles fullscreen.
 
 enum State { WAITING, COUNTDOWN, FIGHT, OVER }
 
-const MIRROR := true               # flip if players appear on the wrong side
 const COUNTDOWN_SEC := 3.5
 const RESTART_HOLD_SEC := 1.5      # both players hold the shield pose this long to rematch
 const HIT_MARGIN := 70.0
@@ -40,7 +40,12 @@ var _water_energy := 0.0
 var _dim: ColorRect
 var _flash: ColorRect
 var _debug: DebugOverlay
-var _pose_gestures := false   # true when BodyTracker's gestures drive casting
+var _menu: SettingsMenu
+var _preview: CameraView      # the camera between the wizards while waiting for players
+## True when BodyTracker's gestures drive casting (a camera with a pose model);
+## false leaves it to the legacy recogniser, which is what the UDP mock uses.
+var _pose_gestures: bool:
+	get: return BodyTracker.processor.available
 var _ko_after_fight := -1.0
 var _fight_time := 0.0
 var _heal_hold: Dictionary = {}   # wizard -> consecutive hands-together events
@@ -91,16 +96,26 @@ func _ready() -> void:
 	add_child(_debug)
 
 	for w in [fire, water]:
-		w.mirror_x = MIRROR
+		w.mirror_x = Settings.mirror
 		w.gestures.bolt_cast.connect(_on_bolt.bind(w))
 		w.gestures.wave_cast.connect(_on_wave.bind(w))
 		w.died.connect(_on_died.bind(w))
 	Tracking.frame_received.connect(_on_tracking_frame)
 	hud.setup(fire, water)
-	if BodyTracker.processor.available:
-		_pose_gestures = true
-		BodyTracker.gesture.connect(_on_pose_gesture)
+	BodyTracker.gesture.connect(_on_pose_gesture)
+	if _pose_gestures:
 		print("gestures: BodyTracker layer (punch = bolt, swipe = wave)")
+
+	_preview = CameraView.new()
+	_preview.position = Vector2(720, 372)
+	_preview.size = Vector2(480, 320)
+	_preview.caption = "Stand back until the camera sees your whole body"
+	_preview.visible = false
+	add_child(_preview)
+	_menu = SettingsMenu.new()
+	_menu.restart_requested.connect(_start_countdown)
+	add_child(_menu)
+	Settings.changed.connect(_on_setting_changed)
 
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--tracklog":
@@ -113,10 +128,37 @@ func _ready() -> void:
 			_shot_interval = maxf(0.05, float(arg.get_slice("=", 1)))
 		elif arg.begins_with("--shot-delay="):
 			_shot_delay = maxf(0.0, float(arg.get_slice("=", 1)))
+		elif arg == "--menu":
+			_menu.open.call_deferred()   # debug: start with the settings menu open
+		elif arg == "--cycle-cameras":
+			_cycle_cameras()             # debug: switch camera every few seconds (use with --no-save)
 		elif arg.begins_with("--ko-at="):
 			_ko_after_fight = float(arg.get_slice("=", 1))   # debug: KO the water wizard this long into the fight
 	if _shot_dir != "":
 		_run_screenshots()
+
+
+func _on_setting_changed(key: String) -> void:
+	if key == "mirror":
+		for w in [fire, water]:
+			w.mirror_x = Settings.mirror
+
+
+## Debug: walks through every camera choice, to shake out switching while frames flow.
+func _cycle_cameras() -> void:
+	var steps: Array = [[Settings.CAMERA_DEPTH, 0], [Settings.CAMERA_AUTO, 0]]
+	var webcams := BodyTracker.list_webcams()
+	for i in webcams.size():
+		steps.append([Settings.CAMERA_RGB, i])
+	steps.append([Settings.CAMERA_AUTO, 0])
+	for step in steps:
+		await get_tree().create_timer(4.0, true, false, true).timeout
+		print("cycle: %s webcam %d  (was: %s)" % [step[0], step[1], Tracking.source_description()])
+		Settings.set_value("webcam_name", webcams[step[1]] if step[1] < webcams.size() else "")
+		Settings.set_value("webcam_index", step[1])
+		Settings.set_value("camera_mode", step[0])
+	await get_tree().create_timer(4.0, true, false, true).timeout
+	print("cycle: done  (%s)" % Tracking.source_description())
 
 
 func _run_screenshots() -> void:
@@ -215,7 +257,7 @@ func _on_tracking_frame(bodies: Array) -> void:
 	# Hand out new bodies to free wizards, nearest lane first.
 	for raw_body in unassigned:
 		var b: BodyData = raw_body
-		var est_x := 960.0 + b.joint("SpineBase").x * Wizard.PIXELS_PER_METER * (-1.0 if MIRROR else 1.0)
+		var est_x := 960.0 + b.joint("SpineBase").x * Wizard.PIXELS_PER_METER * (-1.0 if Settings.mirror else 1.0)
 		var best: Wizard = null
 		var best_dist := INF
 		for w in [fire, water]:
@@ -307,6 +349,8 @@ func _on_died(w: Wizard) -> void:
 
 
 func _update_hud() -> void:
+	_preview.visible = state == State.WAITING and Settings.camera_preview and Tracking.source != "udp" \
+			and (BodyTracker.depth_camera != null or BodyTracker.webcam != null)
 	match state:
 		State.WAITING:
 			hud.center_text = "WIZARD WARS"
@@ -319,7 +363,7 @@ func _update_hud() -> void:
 				hud.sub_text = "Learning the empty room, stay out of view for a moment"
 			else:
 				hud.sub_text = "Step in front of the camera  (waiting for: %s)" % ", ".join(missing)
-			hud.hint_text = "PUNCH forward = bolt    SWEEP sideways = wave    BOTH HANDS UP = shield"
+			hud.hint_text = "PUNCH forward = bolt    SWEEP sideways = wave    BOTH HANDS UP = shield    HANDS TOGETHER = heal"
 		State.COUNTDOWN:
 			hud.center_text = "FIGHT!" if countdown < 0.6 else str(ceili(countdown - 0.5))
 			hud.sub_text = ""
@@ -551,8 +595,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			_debug.cycle()
 		KEY_T:
 			get_tree().change_scene_to_file("res://demo/body_tracking_demo.tscn")
+		KEY_F11:
+			Settings.set_value("fullscreen", not Settings.fullscreen)
 		KEY_ESCAPE:
-			get_tree().quit()
+			_menu.open()
 
 
 # -- Background is the arena shader on a full-screen ColorRect (see _ready). --

@@ -5,8 +5,11 @@ extends Node
 ##   if p: print(p.right_hand.position_3d, p.right_hand.velocity)
 ##   BodyTracker.gesture.connect(func(player, name): ...)
 ##
-## Owns the Gemini camera node (OrbbecCamera extension), the MediaPipe pose
-## processor, identity tracking, filtering, velocities and gestures.
+## Owns the camera, the pose processor, identity tracking, filtering, velocities
+## and gestures. The camera is whichever the Settings autoload allows:
+##   "depth"  RGB + depth - OrbbecCamera (Gemini 2): every joint gets a measured distance
+##   "rgb"    RGB only    - WebcamCamera (any webcam): distance estimated from body size
+##   "auto"   the depth camera when one is plugged in, a webcam otherwise
 ## Camera space is meters: +x right (image right), +y up, +z away from the camera.
 
 signal player_entered(player: TrackedPlayer)
@@ -15,8 +18,15 @@ signal tracking_started()
 signal tracking_lost()
 signal gesture(player: TrackedPlayer, gesture_name: String)
 signal players_updated(players: Array)
+## The camera in use changed (another device, another kind, or none).
+signal camera_changed()
 
-var camera: Node = null            # OrbbecCamera, or null when the extension is missing
+const CAMERA_RETRY_S := 3.0
+
+var camera: Node = null            # the camera in use, null until one starts
+var camera_kind := ""              # "depth" or "rgb": what `camera` is
+var depth_camera: Node = null      # OrbbecCamera, when the mode allows one
+var webcam: Node = null            # WebcamCamera, when the mode allows one
 ## RTMPose (in the extension, ONNX Runtime) when the build carries it, MediaPipe
 ## (GDMP) otherwise. Both emit the same people, so nothing else knows which runs.
 var processor = PoseProcessor.new()
@@ -27,7 +37,12 @@ var status := "starting"
 var camera_fps := 0.0
 var last_pose_time := 0.0
 
+var _rtm: RtmPoseProcessor = null
+var _rtm_error := ""
+var _mediapipe: PoseProcessor = null
+var _force_mediapipe := false
 var _camera_retry_at := 0.0
+var _configure_queued := false
 var _was_tracking := false
 var _handlog := false
 var _frame_times: Array[float] = []
@@ -35,67 +50,212 @@ var _last_frame_id := 0
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS   # tracking keeps running behind the settings menu
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--no-camera":
 			enabled = false
 		elif arg == "--handlog":
 			_handlog = true
+		elif arg == "--mediapipe":
+			_force_mediapipe = true
 	if not enabled:
 		status = "disabled (--no-camera)"
 		return
-	if ClassDB.class_exists("OrbbecCamera"):
-		camera = ClassDB.instantiate("OrbbecCamera")
-		add_child(camera)
-		_try_start_camera()
+	gestures.sensitivity = Settings.sensitivity_factor()
+	Settings.changed.connect(_on_setting_changed)
+	_rtm = RtmPoseProcessor.new()
+	if _force_mediapipe:
+		_rtm_error = "--mediapipe"
+	elif _rtm.load_model():
+		_rtm.poses_ready.connect(_on_poses)
 	else:
-		status = "OrbbecCamera extension not loaded"
-	if camera != null:
-		var force_mediapipe := false
-		for arg in OS.get_cmdline_user_args():
-			if arg == "--mediapipe":
-				force_mediapipe = true
-		var rtm := RtmPoseProcessor.new()
-		var rtm_error := "--mediapipe" if force_mediapipe else ""
-		if not force_mediapipe:
-			if rtm.setup(camera):
-				processor = rtm
-			else:
-				rtm_error = rtm.last_error
-		if processor == rtm:
-			processor.poses_ready.connect(_on_poses)
-			print("BodyTracker: RTMPose ready (in-extension, boxes from depth)")
-		elif processor.setup(camera):
-			processor.poses_ready.connect(_on_poses)
-			print("BodyTracker: MediaPipe pose landmarker ready (RTMPose: %s)" % rtm_error)
-		else:
-			status = "pose: " + processor.last_error + " / RTMPose: " + rtm_error
-			push_warning("BodyTracker: " + status)
+		_rtm_error = _rtm.last_error
+	_configure()
+
+
+func _on_setting_changed(key: String) -> void:
+	match key:
+		"camera_mode", "webcam_name", "webcam_index":
+			# The menu sets the name and the index together: reconfigure once.
+			if not _configure_queued:
+				_configure_queued = true
+				_configure.call_deferred()
+		"webcam_fov":
+			if webcam != null:
+				webcam.set_horizontal_fov(Settings.webcam_fov)
+		"sensitivity":
+			gestures.sensitivity = Settings.sensitivity_factor()
+
+
+## Creates the camera nodes the mode allows and starts the first that works.
+func _configure() -> void:
+	_configure_queued = false
+	_release_cameras()
+	var mode := Settings.camera_mode
+	if mode != Settings.CAMERA_RGB and ClassDB.class_exists("OrbbecCamera"):
+		depth_camera = ClassDB.instantiate("OrbbecCamera")
+		add_child(depth_camera)
+	if mode != Settings.CAMERA_DEPTH and ClassDB.class_exists("WebcamCamera"):
+		webcam = ClassDB.instantiate("WebcamCamera")
+		add_child(webcam)
+	if depth_camera == null and webcam == null:
+		status = "camera extension not loaded"
+		camera_changed.emit()
+		return
+	_try_start_camera()
+	if camera == null:
+		camera_changed.emit()
+
+
+func _release_cameras() -> void:
+	processor.set_camera(null)
+	for node in [depth_camera, webcam]:
+		if node != null:
+			node.stop()
+			node.queue_free()
+	depth_camera = null
+	webcam = null
+	camera = null
+	camera_kind = ""
+	camera_fps = 0.0
+	_frame_times.clear()
+	_forget_players()
+
+
+func _forget_players() -> void:
+	for p in identity.clear():
+		p.visible = false
+		player_left.emit(p)
 
 
 func _try_start_camera() -> void:
-	if camera == null or camera.is_running():
-		return
-	if camera.start():
-		status = "camera: " + camera.get_device_name()
+	_camera_retry_at = Time.get_ticks_msec() / 1000.0 + CAMERA_RETRY_S
+	var problems: Array[String] = []
+	for candidate in [[depth_camera, "depth"], [webcam, "rgb"]]:
+		var node: Node = candidate[0]
+		if node == null:
+			continue
+		if candidate[1] == "rgb":
+			_select_webcam()
+		if node.start():
+			_use_camera(node, candidate[1])
+			return
+		problems.append("%s: %s" % ["depth camera" if candidate[1] == "depth" else "webcam", node.get_last_error()])
+	status = "No camera (%s)" % ", ".join(problems)
+
+
+## The webcam the player picked, by name. Before they pick one, the likeliest
+## to be pointed at them.
+func _select_webcam() -> void:
+	webcam.set_device(preferred_webcam(webcam.list_devices()))
+	webcam.set_horizontal_fov(Settings.webcam_fov)
+
+
+## Index into `names` of the webcam to use: the saved name, else the saved index
+## when the player chose one, else the best guess - a tablet lists its rear
+## camera first, and phone-as-webcam drivers show up even when the phone is away.
+func preferred_webcam(names: PackedStringArray) -> int:
+	var saved := names.find(Settings.webcam_name) if Settings.webcam_name != "" else -1
+	if saved >= 0:
+		return saved
+	if (Settings.webcam_index > 0 or Settings.is_overridden("webcam_index")) and Settings.webcam_index < names.size():
+		return Settings.webcam_index
+	var best := 0
+	var best_score := -100
+	for i in names.size():
+		var n := names[i].to_lower()
+		var score := 0
+		for good in ["front", "integrated", "facetime", "webcam", "user facing"]:
+			if good in n:
+				score += 2
+		for bad in ["rear", "back", "virtual", "infrared", " ir ", "depth", "obs"]:
+			if bad in n:
+				score -= 2
+		if score > best_score:
+			best_score = score
+			best = i
+	return best
+
+
+func _use_camera(node: Node, kind: String) -> void:
+	camera = node
+	camera_kind = kind
+	status = "camera: " + node.get_device_name()
+	_frame_times.clear()
+	_forget_players()
+	# Reach inferred from a foreshortened arm reads short of a measured one.
+	gestures.forward_scale = 0.75 if kind == "rgb" else 1.0
+	if _rtm_error == "":
+		processor = _rtm
+		_rtm.set_camera(camera)
+		print("BodyTracker: %s, RTMPose %s" % [describe_camera(), "with depth" if kind == "depth" else "on RGB only (distance from body size)"])
+	elif kind == "depth":
+		if _mediapipe == null:
+			_mediapipe = PoseProcessor.new()
+			_mediapipe.poses_ready.connect(_on_poses)
+		processor = _mediapipe
+		if _mediapipe.setup(camera):
+			print("BodyTracker: %s, MediaPipe pose landmarker (RTMPose: %s)" % [describe_camera(), _rtm_error])
+		else:
+			status = "pose: " + _mediapipe.last_error + " / RTMPose: " + _rtm_error
+			push_warning("BodyTracker: " + status)
 	else:
-		status = "no camera: " + camera.get_last_error()
-	_camera_retry_at = Time.get_ticks_msec() / 1000.0 + 3.0
+		status = "a webcam needs RTMPose, which this build lacks (%s)" % _rtm_error
+		push_warning("BodyTracker: " + status)
+	camera_changed.emit()
+
+
+## "Orbbec Gemini 2 (RGB + depth)", "Surface Camera Front (RGB)", or "" with no camera.
+func describe_camera() -> String:
+	if camera == null:
+		return ""
+	return "%s (%s)" % [camera.get_device_name(), "RGB + depth" if camera_kind == "depth" else "RGB"]
+
+
+## Look for cameras again with the current settings: for a camera plugged in
+## after the game started (auto mode does not leave a working webcam by itself).
+func rescan() -> void:
+	_configure()
+
+
+## Webcam names for the settings menu, in device index order.
+func list_webcams() -> PackedStringArray:
+	if webcam != null:
+		return webcam.list_devices()
+	if not ClassDB.class_exists("WebcamCamera"):
+		return PackedStringArray()
+	var probe: Node = ClassDB.instantiate("WebcamCamera")
+	var names: PackedStringArray = probe.list_devices()
+	probe.free()
+	return names
 
 
 func _process(_delta: float) -> void:
-	if camera == null:
+	if depth_camera == null and webcam == null:
 		return
 	var now := Time.get_ticks_msec() / 1000.0
-	if not camera.is_running() and now >= _camera_retry_at:
-		_try_start_camera()
-	if camera.is_running():
-		var fid: int = camera.get_color_frame_id()
-		if fid != _last_frame_id:
-			_last_frame_id = fid
-			_frame_times.append(now)
-		while _frame_times.size() > 0 and now - _frame_times[0] > 2.0:
-			_frame_times.pop_front()
-		camera_fps = _frame_times.size() / 2.0
+	if camera != null and not camera.is_running():
+		# Unplugged, or taken by another app: say why and look again.
+		status = "camera lost: " + camera.get_last_error()
+		push_warning("BodyTracker: " + status)
+		processor.set_camera(null)
+		camera = null
+		camera_kind = ""
+		_forget_players()
+		camera_changed.emit()
+		_camera_retry_at = now + 1.0
+	if camera == null:
+		if now >= _camera_retry_at:
+			_try_start_camera()
+		if camera == null:
+			return
+	var fid: int = camera.get_color_frame_id()
+	if fid != _last_frame_id:
+		_last_frame_id = fid
+		_frame_times.append(now)
+	while _frame_times.size() > 0 and now - _frame_times[0] > 2.0:
+		_frame_times.pop_front()
+	camera_fps = _frame_times.size() / 2.0
 	processor.poll()
 	# Expire players that vanished.
 	for p in identity.expire(now):

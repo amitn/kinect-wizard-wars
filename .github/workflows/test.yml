@@ -22,6 +22,12 @@ jobs:
           g++ -std=c++17 -O2 -Wall -Isrc tests/body_tracker_test.cpp src/body_tracker.cpp -o body_tracker_test
           ./body_tracker_test
 
+      - name: Compile and run the webcam pixel conversion test
+        working-directory: extension
+        run: |
+          g++ -std=c++17 -O2 -Wall -Isrc tests/webcam_convert_test.cpp -o webcam_convert_test
+          ./webcam_convert_test
+
   # Runs the Godot project headless against the mock UDP bridge. The OrbbecCamera
   # extension is not built here, so the log says the extension is not loaded and
   # the game falls back to UDP; that is expected.
@@ -74,7 +80,8 @@ jobs:
           echo "--- mock.log ---"
           cat mock.log 2>/dev/null | tail -n 20 || true
 
-  # Builds the OrbbecCamera GDExtension for Linux x86_64 against OrbbecSDK v2.
+  # Builds the GDExtension for Linux x86_64 against OrbbecSDK v2, then points its
+  # V4L2 webcam backend at a loopback camera fed by ffmpeg.
   extension-linux:
     runs-on: ubuntu-latest
     steps:
@@ -120,3 +127,27 @@ jobs:
           test -f "$lib" || { echo "::error::$lib was not built"; ls -R game/bin || true; exit 1; }
           ls -l game/bin/linux
           file "$lib"
+
+      - name: Webcam backend against a loopback camera
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg "linux-modules-extra-$(uname -r)" || true
+          if ! sudo modprobe v4l2loopback devices=1 video_nr=42 card_label="Loopback Test Camera" exclusive_caps=1; then
+            sudo apt-get install -y -qq v4l2loopback-dkms || true
+            if ! sudo modprobe v4l2loopback devices=1 video_nr=42 card_label="Loopback Test Camera" exclusive_caps=1; then
+              echo "::warning::v4l2loopback is not available on this runner, so webcam capture was not exercised"
+              exit 0
+            fi
+          fi
+          sudo chmod 666 /dev/video42
+          ffmpeg -loglevel error -re -f lavfi -i "testsrc2=size=640x480:rate=30" -pix_fmt yuyv422 -f v4l2 /dev/video42 &
+          sleep 2
+          v="$GODOT_VERSION"
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${v}-stable/Godot_v${v}-stable_linux.x86_64.zip"
+          unzip -q godot.zip -d godot
+          godot="$PWD/godot/Godot_v${v}-stable_linux.x86_64"
+          chmod +x "$godot"
+          "$godot" --headless --path game --import
+          "$godot" --headless --path game --script res://probes/webcam_probe.gd -- --no-camera --require 2>&1 | tee probe.log
+          grep -q "Loopback Test Camera" probe.log
+          grep -q "640x480" probe.log

@@ -46,6 +46,13 @@ func assign(detections: Array, now: float) -> Array:
 	return assigned
 
 
+## Forgets everyone, for when the camera changes. Returns who was dropped.
+func clear() -> Array:
+	var gone := players.values()
+	players.clear()
+	return gone
+
+
 func expire(now: float) -> Array:
 	var gone: Array = []
 	for pid in players.keys():

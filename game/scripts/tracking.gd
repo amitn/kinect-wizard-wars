@@ -1,7 +1,7 @@
 extends Node
 ## Autoload "Tracking". Publishes player skeleton frames as BodyData from
 ## whichever source is available:
-##   1. the OrbbecCamera GDExtension (extension/), reading the depth camera directly, or
+##   1. BodyTracker's camera (a depth camera or a plain webcam, see Settings), or
 ##   2. UDP packets from tools/mock_bridge.py (or any bridge speaking the same JSON).
 ## Both sources produce the same body dictionaries, so the game never cares.
 
@@ -9,7 +9,6 @@ signal frame_received(bodies: Array)
 
 const DEFAULT_PORT := 7777
 const TIMEOUT_SEC := 1.0
-const CAMERA_RETRY_SEC := 3.0
 
 var port: int = DEFAULT_PORT
 var bodies: Array[BodyData] = []
@@ -18,11 +17,17 @@ var last_packet_time: float = -100.0
 var source: String = "none"   # "camera", "udp" or "none"
 
 var _udp := PacketPeerUDP.new()
-var _camera: Node = null
-var _camera_retry_at := 0.0
+var _use_camera := true
+var _blob_camera: Node = null   # the depth camera whose blob tracker is wired in (no pose model)
 var _tracklog := false        # --tracklog: print a body summary twice a second
 var _tracklog_next := 0.0
-var _pose_mode := false
+
+## The camera in use, or null. It can change while the game runs.
+var _camera: Node:
+	get: return BodyTracker.camera if _use_camera else null
+## True when skeletons come from a pose model rather than the depth-blob tracker.
+var _pose_mode: bool:
+	get: return BodyTracker.processor.available
 
 ## Kinect-style joint names -> MediaPipe joints (averaged). "Left" in the game
 ## is the image's left, which is the person's right when facing the camera.
@@ -74,6 +79,7 @@ func _on_players_updated(players: Array) -> void:
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	port = _port_from_cmdline()
 	var err := _udp.bind(port, "0.0.0.0")
 	if err != OK:
@@ -81,26 +87,40 @@ func _ready() -> void:
 	else:
 		print("Tracking: listening for bridge frames on UDP port %d" % port)
 
-	var use_camera := true
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--tracklog":
 			_tracklog = true
 		elif arg == "--no-camera":
-			use_camera = false   # leave the camera to an external bridge (tools/pose_bridge.py)
-	if use_camera and BodyTracker.camera != null:
-		print("Tracking: OrbbecCamera extension loaded")
-		_camera = BodyTracker.camera
-		if BodyTracker.processor.available:
-			# Real skeletons from MediaPipe + depth.
-			BodyTracker.players_updated.connect(_on_players_updated)
-			_pose_mode = true
-			print("Tracking: using %s skeletons" % ("RTMPose" if BodyTracker.processor is RtmPoseProcessor else "MediaPipe"))
-		else:
-			# Fallback: the depth-blob tracker inside the extension.
-			_camera.frame_received.connect(_on_raw_frame.bind("camera"))
-			print("Tracking: pose landmarker unavailable (%s), using the depth-blob tracker" % BodyTracker.processor.last_error)
+			_use_camera = false   # UDP only: leave the camera to an external bridge
+	if _use_camera and ClassDB.class_exists("OrbbecCamera"):
+		# The smoke tests in CI look for this line.
+		print("Tracking: OrbbecCamera extension loaded%s" % (", with WebcamCamera" if ClassDB.class_exists("WebcamCamera") else ""))
+		BodyTracker.players_updated.connect(_on_players_updated)
+		BodyTracker.camera_changed.connect(_on_camera_changed)
+		_on_camera_changed()
 	else:
 		print("Tracking: OrbbecCamera extension not loaded, using UDP only")
+
+
+## Skeletons come from the pose model whenever there is one. Without it (a build
+## with neither RTMPose nor MediaPipe) a depth camera still has the blob tracker.
+func _on_camera_changed() -> void:
+	if _blob_camera != null and is_instance_valid(_blob_camera) and _blob_camera.frame_received.is_connected(_on_raw_frame):
+		_blob_camera.frame_received.disconnect(_on_raw_frame)
+	_blob_camera = null
+	var cam := _camera
+	if cam == null:
+		return
+	if _pose_mode:
+		print("Tracking: using %s skeletons from %s" % [_engine_name(), BodyTracker.describe_camera()])
+	elif BodyTracker.camera_kind == "depth":
+		_blob_camera = cam
+		cam.frame_received.connect(_on_raw_frame.bind("camera"))
+		print("Tracking: pose landmarker unavailable (%s), using the depth-blob tracker" % BodyTracker.processor.last_error)
+
+
+func _engine_name() -> String:
+	return "RTMPose" if BodyTracker.processor is RtmPoseProcessor else "MediaPipe"
 
 
 ## Reads `--tracking-port=<n>` (or `--tracking-port <n>`) from the command line.
@@ -134,62 +154,51 @@ func has_camera() -> bool:
 	return _camera != null and _camera.is_running()
 
 
+## Only the depth-blob tracker learns a background; pose tracking never waits.
 func is_background_ready() -> bool:
-	return _camera == null or not _camera.is_running() or _camera.is_background_ready()
+	return _blob_camera == null or not _blob_camera.is_running() or _blob_camera.is_background_ready()
 
 
-## Debug image from the camera extension (depth + blobs + markers), or null.
+## Debug image from the depth camera (depth + blobs + markers), or null.
 func get_camera_debug_image() -> Image:
-	if _camera == null or not _camera.is_running():
+	var cam := BodyTracker.depth_camera if _use_camera else null
+	if cam == null or not cam.is_running():
 		return null
-	return _camera.get_debug_image()
+	return cam.get_debug_image()
 
 
 func set_camera_debug(enabled: bool) -> void:
-	if _camera != null:
-		_camera.set_debug_enabled(enabled)
+	var cam := BodyTracker.depth_camera if _use_camera else null
+	if cam != null:
+		cam.set_debug_enabled(enabled)
 
 
 ## Re-learn the empty room. Players should step out of view for a second.
 func learn_background() -> void:
-	if _camera != null and _camera.is_running():
-		_camera.learn_background()
+	if _blob_camera != null and _blob_camera.is_running():
+		_blob_camera.learn_background()
 		print("Tracking: re-learning background")
 
 
 func source_description() -> String:
 	if has_camera() and _pose_mode:
-		var engine := "RTMPose" if BodyTracker.processor is RtmPoseProcessor else "MediaPipe"
 		var warn := ""
 		for p in BodyTracker.players:
 			if p.visible and p.position.z > 0.0 and p.position.z < 1.2:
 				warn = "   TOO CLOSE: step back to 2 m so the whole body is in view"
-		return "Camera: %s  %s %.0f poses/s, %.0f ms (%d bodies)%s" % [_camera.get_device_name(), engine, BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size(), warn]
+		return "Camera: %s  %s %.0f poses/s, %.0f ms (%d bodies)%s" % [BodyTracker.describe_camera(), _engine_name(), BodyTracker.processor.poses_per_second, BodyTracker.processor.inference_ms, bodies.size(), warn]
 	if has_camera():
-		if not _camera.is_background_ready():
-			return "Camera: %s  -  learning the empty room, stay out of view" % _camera.get_device_name()
-		return "Camera: %s (%d bodies)" % [_camera.get_device_name(), bodies.size()]
+		if not is_background_ready():
+			return "Camera: %s  -  learning the empty room, stay out of view" % BodyTracker.describe_camera()
+		return "Camera: %s (%d bodies)  -  %s" % [BodyTracker.describe_camera(), bodies.size(), BodyTracker.status]
 	if not is_connected_to_source():
-		if _camera != null:
-			return "No camera (%s)  -  or run tools/mock_bridge.py" % _camera.get_last_error()
+		if _use_camera and (BodyTracker.depth_camera != null or BodyTracker.webcam != null):
+			return "%s  -  Esc: settings" % BodyTracker.status
 		return "No tracking source  -  run tools/mock_bridge.py"
 	return "UDP bridge on port %d (%d bodies)" % [port, bodies.size()]
 
 
-func _try_start_camera() -> void:
-	if _camera == null or _camera.is_running():
-		return
-	if _camera.start():
-		print("Tracking: using %s" % _camera.get_device_name())
-	else:
-		print("Tracking: no camera: %s" % _camera.get_last_error())
-	_camera_retry_at = Time.get_ticks_msec() / 1000.0 + CAMERA_RETRY_SEC
-
-
 func _process(_delta: float) -> void:
-	if _camera != null and not _pose_mode and not _camera.is_running() and Time.get_ticks_msec() / 1000.0 >= _camera_retry_at:
-		_try_start_camera()
-
 	# Drain the socket and keep only the newest packet; stale frames are useless.
 	var latest := PackedByteArray()
 	var got_packet := false

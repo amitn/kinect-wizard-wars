@@ -6,6 +6,11 @@ extends RefCounted
 ## people, so BodyTracker, TrackedPlayer and every game above them are unchanged
 ## and cannot tell which one is running.
 ##
+## It runs on either camera. With a depth camera (OrbbecCamera) every keypoint
+## gets its distance from the depth image. With a plain webcam (WebcamCamera)
+## there is no depth, so distance is estimated from how large the person
+## appears - see _person_from_size().
+##
 ## Three differences worth knowing:
 ##   - Inference happens inside the extension (RtmPose, ONNX Runtime's C API),
 ##     measured at 6.6 ms a person here against MediaPipe's 32 to 48.
@@ -38,6 +43,7 @@ const NEAR_SURFACE := [7, 8, 9, 10]
 
 var num_poses := 2
 var min_score := 0.45         # mean keypoint confidence for a real person (people score 0.65+, furniture and plants 0.25 to 0.35)
+var upper_min_score := 0.6    # RGB only: a confident face and shoulders pass when the rest of the body is out of view
 var play_near_m := 0.8
 var play_far_m := 3.6
 var arm_depth_limit_m := 0.8
@@ -57,12 +63,30 @@ var input_scale := 1.0
 var use_gpu := false
 var has_percentile := true
 
+# RGB only (no depth camera): distances come from the apparent size of a
+# reference adult, so everyone measures as one - a child reads as an adult
+# standing further back, which is what height-scaled gesture thresholds want.
+const REF_TORSO_M := 0.49        # shoulder line to hip line
+const REF_SHOULDERS_M := 0.35
+const REF_THIGH_M := 0.42
+const REF_SHIN_M := 0.41
+const REF_UPPER_ARM_M := 0.30
+const REF_FOREARM_M := 0.25
+const ARM_DEAD_BAND_M := 0.05    # reach below this is keypoint jitter on a fully visible arm
+const ARM_SCALE_MIN := 0.85      # how far a player's arms may differ from the reference
+const ARM_SCALE_MAX := 1.2
+const SIZE_SMOOTHING := 0.2      # how fast the estimated distance follows a new reading
+const ARM_MIN_SCORE := 0.45      # a wrist the model is unsure of is not evidence of a punch
+var rgb_near_m := 0.4            # a webcam player may sit at a desk
+var rgb_far_m := 6.0
+
 var _camera: Node
+var _has_depth := true
 var _pose = null               # RtmPose, from the extension
 var _last_frame_id := -1
 var _log := false
 var _log_next := 0.0
-var _tracks: Array = []        # [{box: Rect2, seen: float}] - people we are following
+var _tracks: Array = []        # [{box: Rect2, seen: float, body: Dictionary}] - people we are following
 var _scan := 0                 # which candidate crop to sweep next
 const SCAN_COLUMNS := 4
 const TRACK_MEMORY := 0.6      # seconds a track survives without being confirmed
@@ -71,16 +95,31 @@ var _result_times: Array[float] = []
 
 
 func setup(camera: Node) -> bool:
+	if _pose == null and not load_model():
+		return false
+	set_camera(camera)
+	return available
+
+
+## Points the processor at a camera (OrbbecCamera or WebcamCamera), or at
+## nothing. The model stays loaded, so switching cameras costs nothing.
+func set_camera(camera: Node) -> void:
 	_camera = camera
+	_tracks.clear()
+	_last_frame_id = -1
+	_has_depth = false
+	if camera != null:
+		_has_depth = camera.has_depth() if camera.has_method("has_depth") else camera.has_method("get_depth_percentile")
+	available = _pose != null and camera != null
+
+
+func load_model() -> bool:
 	available = false
 	if not ClassDB.class_exists("RtmPose"):
 		last_error = "RtmPose not in the extension (build with onnxruntime=<dir>)"
 		return false
 	if not FileAccess.file_exists(MODEL_PATH):
 		last_error = "model missing: " + MODEL_PATH + " (tools/fetch_rtmpose_model.sh)"
-		return false
-	if camera == null or not camera.has_method("get_person_boxes"):
-		last_error = "this OrbbecCamera build has no get_person_boxes"
 		return false
 	var file := FileAccess.open(MODEL_PATH, FileAccess.READ)
 	if file == null:
@@ -96,7 +135,6 @@ func setup(camera: Node) -> bool:
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--tracklog":
 			_log = true
-	available = true
 	last_error = ""
 	return true
 
@@ -128,7 +166,7 @@ func poll() -> void:
 	var now_s := Time.get_ticks_msec() / 1000.0
 	var found: Array = []
 	for box in boxes:
-		var person := _person_from_box(image, box)
+		var person := _person_from_box(image, box, _body_of(box))
 		if person.is_empty():
 			continue
 		# Do not report the same person twice when a scan crop lands on somebody
@@ -141,7 +179,7 @@ func poll() -> void:
 		if duplicate:
 			continue
 		people.append(person)
-		found.append(person["box"])
+		found.append({"box": person["box"], "body": person["body"]})
 		if people.size() >= num_poses:
 			break
 	_update_tracks(found, now_s)
@@ -171,9 +209,12 @@ func _candidate_boxes(width: int, height: int) -> Array:
 	if boxes.size() < num_poses:
 		var slice_w := float(width) / float(SCAN_COLUMNS) * 1.6
 		var step := (float(width) - slice_w) / float(maxi(SCAN_COLUMNS - 1, 1))
-		var x := step * float(_scan % SCAN_COLUMNS)
+		var turn := _scan % (SCAN_COLUMNS + 1)
 		_scan += 1
-		var candidate := Rect2(x, 0.0, slice_w, float(height))
+		var candidate := Rect2(step * float(turn), 0.0, slice_w, float(height))
+		if turn == SCAN_COLUMNS:
+			# After the slices, the whole frame: somebody close fills more than a slice.
+			candidate = Rect2(0.0, 0.0, float(width), float(height))
 		var overlaps := false
 		for box in boxes:
 			if box.intersects(candidate) and box.intersection(candidate).get_area() > box.get_area() * 0.5:
@@ -188,10 +229,11 @@ func _candidate_boxes(width: int, height: int) -> Array:
 ## unconfirmed for TRACK_MEMORY are dropped and the sweep picks them up again.
 func _update_tracks(found: Array, now_s: float) -> void:
 	var kept: Array = []
-	for box in found:
+	for entry in found:
 		# Ease the box toward the new keypoints instead of snapping to them. The
 		# crop decides what the model sees, so a box that chases every frame's
 		# jitter feeds that jitter straight back into the keypoints it came from.
+		var box: Rect2 = entry["box"]
 		var smoothed: Rect2 = box
 		for track in _tracks:
 			var previous: Rect2 = track["box"]
@@ -199,7 +241,7 @@ func _update_tracks(found: Array, now_s: float) -> void:
 				smoothed = Rect2(previous.position.lerp(box.position, BOX_SMOOTHING),
 						previous.size.lerp(box.size, BOX_SMOOTHING))
 				break
-		kept.append({"box": smoothed, "seen": now_s})
+		kept.append({"box": smoothed, "seen": now_s, "body": entry["body"]})
 	for track in _tracks:
 		if now_s - track["seen"] >= TRACK_MEMORY:
 			continue
@@ -213,8 +255,18 @@ func _update_tracks(found: Array, now_s: float) -> void:
 	_tracks = kept
 
 
-## One person: keypoints from RTMPose, distance from the depth camera.
-func _person_from_box(image: Image, box: Rect2) -> Dictionary:
+## What is remembered about the person a candidate box follows (their smoothed
+## size and arm length, RGB only). A sweep box follows nobody yet.
+func _body_of(box: Rect2) -> Dictionary:
+	for track in _tracks:
+		if track["box"] == box:
+			return track.get("body", {})
+	return {}
+
+
+## One person: keypoints from RTMPose, distance from the depth camera - or from
+## their apparent size when the camera has no depth.
+func _person_from_box(image: Image, box: Rect2, body: Dictionary) -> Dictionary:
 	var kps: PackedVector3Array = _pose.infer(image, box)
 	if kps.size() < 17:
 		return {}
@@ -231,7 +283,13 @@ func _person_from_box(image: Image, box: Rect2) -> Dictionary:
 			box, mean_score, best, wrists,
 			kps[0].x, kps[0].y, kps[COCO_HIPS[0]].x, kps[COCO_HIPS[0]].y])
 	if mean_score < min_score:
-		return {}
+		# Somebody close to a webcam, or sitting at a desk, shows only head and
+		# shoulders: the missing legs drag the whole-body mean under the bar. A
+		# depth camera needs its full-body view anyway, so this is for RGB only.
+		if _has_depth or _upper_body_score(kps) < upper_min_score:
+			return {}
+	if not _has_depth:
+		return _person_from_size(kps, image, body)
 
 	# Torso first: it is the depth every uncertain limb falls back to.
 	var torso_samples: Array[float] = []
@@ -280,8 +338,162 @@ func _person_from_box(image: Image, box: Rect2) -> Dictionary:
 		"root": root,
 		"landmarks": landmarks,
 		"box": _box_from_keypoints(kps),
+		"body": body,
 		"timestamp_ms": int(_camera.get_timestamp()),
 	}
+
+
+## RGB only. Three estimates stand in for the depth image:
+##   - distance: a body segment of known length L that spans p pixels is
+##     focal * L / p away. Foreshortening only ever makes a segment look
+##     shorter, so the truth is near the longest reading; the second longest is
+##     used so one bad keypoint cannot pull the player forward.
+##   - the body: every joint sits on the plane at that distance.
+##   - the arms: an arm pointed at the camera shrinks toward a dot, so each
+##     segment's reach toward the lens is sqrt(L^2 - seen^2). That is the signal
+##     a punch needs, and the gesture detector reads it exactly like real depth.
+func _person_from_size(kps: PackedVector3Array, image: Image, body: Dictionary) -> Dictionary:
+	for i in COCO_SHOULDERS:
+		if kps[i].z < 0.3:
+			return {}
+	var shoulders := (kps[COCO_SHOULDERS[0]] + kps[COCO_SHOULDERS[1]]) * 0.5
+	var hips := (kps[COCO_HIPS[0]] + kps[COCO_HIPS[1]]) * 0.5
+	var hips_seen: bool = kps[COCO_HIPS[0]].z > 0.3 and kps[COCO_HIPS[1]].z > 0.3
+	if hips_seen:
+		var spine := Vector2(hips.x - shoulders.x, hips.y - shoulders.y)
+		# Players stand; a torso lying across the image is a sofa cushion or a poster.
+		if spine.y < spine.length() * 0.6:
+			return {}
+	var px_per_m := _pixels_per_meter(kps, hips_seen)
+	var intrinsics: PackedFloat32Array = _camera.get_intrinsics()
+	if px_per_m <= 0.0 or intrinsics.size() < 1 or intrinsics[0] <= 0.0:
+		return {}
+	if body.has("px_per_m"):
+		px_per_m = lerpf(body["px_per_m"], px_per_m, SIZE_SMOOTHING)
+	var torso_z: float = intrinsics[0] / px_per_m
+	if torso_z < rgb_near_m or torso_z > rgb_far_m:
+		if _log:
+			print("rtm: estimated distance %.2f m outside %.1f-%.1f" % [torso_z, rgb_near_m, rgb_far_m])
+		return {}
+	body = body.duplicate()
+	body["px_per_m"] = px_per_m
+	if not hips_seen:
+		# Somebody close, or sitting at a desk: only the upper body is in view. The
+		# hips go where a torso's length below the shoulders puts them.
+		hips = shoulders + Vector3(0.0, REF_TORSO_M * px_per_m, 0.0)
+
+	var width := float(image.get_width())
+	var height := float(image.get_height())
+	var landmarks: Array = []
+	for i in COCO_TO_JOINT.size():
+		landmarks.append(_flat_landmark(kps[i], COCO_TO_JOINT[i], torso_z, width, height))
+
+	var arm_scale := _arm_scale(body, kps, landmarks)
+	for arm in [[5, COCO_LEFT_ELBOW, COCO_LEFT_WRIST], [6, COCO_RIGHT_ELBOW, COCO_RIGHT_WRIST]]:
+		var shoulder: Dictionary = landmarks[arm[0]]
+		var elbow: Dictionary = landmarks[arm[1]]
+		var wrist: Dictionary = landmarks[arm[2]]
+		# Reach needs a wrist the model is sure of: with the hands out of frame it
+		# still reports wrists, low in confidence and jumping about, and their
+		# "foreshortening" is noise. The elbow may be half hidden behind the fist.
+		var arm_seen: bool = kps[arm[2]].z >= ARM_MIN_SCORE and kps[arm[1]].z >= 0.25
+		var upper := _reach_toward_camera(shoulder["position_3d"], elbow["position_3d"], REF_UPPER_ARM_M * arm_scale) if arm_seen else 0.0
+		var fore := _reach_toward_camera(elbow["position_3d"], wrist["position_3d"], REF_FOREARM_M * arm_scale) if arm_seen else 0.0
+		elbow["position_3d"] = _camera.deproject_pixel(elbow["pixel"].x, elbow["pixel"].y, torso_z - upper)
+		wrist["position_3d"] = _camera.deproject_pixel(wrist["pixel"].x, wrist["pixel"].y, torso_z - upper - fore)
+		wrist["depth_inferred"] = not arm_seen
+		wrist["depth_raw"] = torso_z - upper - fore
+		if not arm_seen:
+			# Below the tracker's validity bar, so no gesture is read from this hand.
+			wrist["visibility"] = minf(wrist["visibility"], 0.29)
+			wrist["presence"] = wrist["visibility"]
+	for pair in [[COCO_LEFT_WRIST, 19], [COCO_RIGHT_WRIST, 20]]:
+		var finger: Dictionary = landmarks[pair[0]].duplicate()
+		finger["index"] = pair[1]
+		landmarks.append(finger)
+
+	return {
+		"root": _camera.deproject_pixel(hips.x, hips.y, torso_z),
+		"landmarks": landmarks,
+		"box": _box_from_keypoints(kps),
+		"body": body,
+		"timestamp_ms": int(_camera.get_timestamp()),
+	}
+
+
+## How many pixels a metre spans at the player's distance, from the body
+## segments whose both ends are confidently seen.
+func _pixels_per_meter(kps: PackedVector3Array, hips_seen: bool) -> float:
+	var readings: Array[float] = [_span(kps[COCO_SHOULDERS[0]], kps[COCO_SHOULDERS[1]]) / REF_SHOULDERS_M]
+	if not hips_seen:
+		return readings[0]
+	var shoulders := (kps[COCO_SHOULDERS[0]] + kps[COCO_SHOULDERS[1]]) * 0.5
+	var hips := (kps[COCO_HIPS[0]] + kps[COCO_HIPS[1]]) * 0.5
+	readings.append(Vector2(shoulders.x - hips.x, shoulders.y - hips.y).length() / REF_TORSO_M)
+	for leg in [[11, 13, 15], [12, 14, 16]]:   # hip, knee, ankle
+		if kps[leg[0]].z > 0.4 and kps[leg[1]].z > 0.4:
+			readings.append(_span(kps[leg[0]], kps[leg[1]]) / REF_THIGH_M)
+		if kps[leg[1]].z > 0.4 and kps[leg[2]].z > 0.4:
+			readings.append(_span(kps[leg[1]], kps[leg[2]]) / REF_SHIN_M)
+	readings.sort()
+	return readings[-2] if readings.size() >= 3 else readings[-1]
+
+
+func _span(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.y - b.y).length()
+
+
+## The player's arm length against the reference adult's: the 90th percentile of
+## the longest arm segment seen over the last few seconds (an arm is at its true
+## length whenever it lies across the image, which happens all the time).
+func _arm_scale(body: Dictionary, kps: PackedVector3Array, landmarks: Array) -> float:
+	var ratios: Array = body.get("arm_ratios", []).duplicate()
+	var longest := 0.0
+	for segment in [[5, 7, REF_UPPER_ARM_M], [6, 8, REF_UPPER_ARM_M], [7, 9, REF_FOREARM_M], [8, 10, REF_FOREARM_M]]:
+		if kps[segment[0]].z < 0.5 or kps[segment[1]].z < 0.5:
+			continue
+		var a: Vector3 = landmarks[segment[0]]["position_3d"]
+		var b: Vector3 = landmarks[segment[1]]["position_3d"]
+		longest = maxf(longest, Vector2(a.x - b.x, a.y - b.y).length() / float(segment[2]))
+	if longest > 0.6:
+		ratios.append(minf(longest, ARM_SCALE_MAX))
+		if ratios.size() > 150:
+			ratios.pop_front()
+	body["arm_ratios"] = ratios
+	if ratios.size() < 15:
+		return 1.0
+	var sorted := ratios.duplicate()
+	sorted.sort()
+	return clampf(sorted[int(sorted.size() * 0.9)], ARM_SCALE_MIN, ARM_SCALE_MAX)
+
+
+## How far toward the camera a limb segment of real length `length_m` must
+## point to look as short as it does between a and b.
+func _reach_toward_camera(a: Vector3, b: Vector3, length_m: float) -> float:
+	var seen := Vector2(a.x - b.x, a.y - b.y).length()
+	var ratio := clampf(seen / length_m, 0.0, 1.0)
+	return maxf(0.0, length_m * sqrt(1.0 - ratio * ratio) - ARM_DEAD_BAND_M)
+
+
+func _flat_landmark(kp: Vector3, joint_index: int, depth: float, width: float, height: float) -> Dictionary:
+	return {
+		"index": joint_index,
+		"normalized": Vector2(kp.x / width, kp.y / height),
+		"pixel": Vector2(kp.x, kp.y),
+		"position_3d": _camera.deproject_pixel(kp.x, kp.y, depth),
+		"visibility": kp.z,
+		"presence": kp.z,
+		"depth_ok": true,
+		"depth_inferred": false,
+	}
+
+
+## Mean confidence of the nose, eyes, ears and shoulders.
+func _upper_body_score(kps: PackedVector3Array) -> float:
+	var sum := 0.0
+	for i in 7:
+		sum += kps[i].z
+	return sum / 7.0
 
 
 func _box_from_keypoints(kps: PackedVector3Array) -> Rect2:

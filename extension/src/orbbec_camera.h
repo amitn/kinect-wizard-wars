@@ -44,6 +44,8 @@ public:
 	int get_tracked_body_count() const;
 	godot::String get_last_error() const;
 	godot::String get_device_name() const;
+	/// True here, false on WebcamCamera: tells the pose layer whether the depth queries mean anything.
+	bool has_depth() const { return true; }
 	int get_depth_width() const;
 	int get_depth_height() const;
 	/// Debug view: the working depth image with foreground tinted and body markers drawn.
