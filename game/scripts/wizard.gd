@@ -3,6 +3,8 @@ extends Node2D
 ## One player: health, mana, shield, the tracked skeleton and how it is drawn.
 
 signal died
+signal shield_toggled(up: bool)      # the shield really went up or came down
+signal tracked_changed(tracked: bool)  # a player took this wizard, or left it
 
 @export var element: String = "fire"
 @export var facing: int = 1          # +1 casts toward the right, -1 toward the left
@@ -21,7 +23,12 @@ const FOLLOW_SMOOTH := 0.25     # per-frame lerp toward the player's position
 
 var hp := MAX_HP
 var mana := MAX_MANA
-var shield_up := false
+var shield_up := false:
+	set(value):
+		if value == shield_up:
+			return
+		shield_up = value
+		shield_toggled.emit(value)
 var body: BodyData = null
 var body_id: String = ""
 var body_seen_at := -100.0
@@ -66,6 +73,8 @@ func opponent_element() -> String:
 # -- Body tracking ----------------------------------------------------------
 
 func set_body(new_body: BodyData, now: float) -> void:
+	if body == null:
+		tracked_changed.emit(true)
 	body = new_body
 	body_id = new_body.id
 	body_seen_at = now
@@ -75,6 +84,8 @@ func set_body(new_body: BodyData, now: float) -> void:
 
 
 func clear_body() -> void:
+	if body != null:
+		tracked_changed.emit(false)
 	body = null
 	body_id = ""
 	_follow_ref_x = INF

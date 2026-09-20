@@ -49,6 +49,7 @@ var _pose_gestures: bool:
 var _ko_after_fight := -1.0
 var _fight_time := 0.0
 var _heal_hold: Dictionary = {}   # wizard -> consecutive hands-together events
+var _count_shown := ""            # the countdown text last announced, so each number sounds once
 
 # Debug: `godot --path game -- --screenshots=<dir>` saves the viewport every
 # SHOT_INTERVAL seconds for SHOT_COUNT shots, then quits.
@@ -100,6 +101,8 @@ func _ready() -> void:
 		w.gestures.bolt_cast.connect(_on_bolt.bind(w))
 		w.gestures.wave_cast.connect(_on_wave.bind(w))
 		w.died.connect(_on_died.bind(w))
+		w.shield_toggled.connect(_on_shield_toggled.bind(w))
+		w.tracked_changed.connect(_on_tracked_changed.bind(w))
 	Tracking.frame_received.connect(_on_tracking_frame)
 	hud.setup(fire, water)
 	BodyTracker.gesture.connect(_on_pose_gesture)
@@ -136,6 +139,15 @@ func _ready() -> void:
 			_ko_after_fight = float(arg.get_slice("=", 1))   # debug: KO the water wizard this long into the fight
 	if _shot_dir != "":
 		_run_screenshots()
+
+
+func _on_shield_toggled(up: bool, w: Wizard) -> void:
+	if state == State.FIGHT or state == State.OVER:
+		Audio.play("shield_up" if up else "shield_down", w.position.x, 0.0, 0.03, 1.0 if w.element == "fire" else 1.12)
+
+
+func _on_tracked_changed(tracked: bool, w: Wizard) -> void:
+	Audio.play("join" if tracked else "leave", w.position.x, 0.0, 0.0)
 
 
 func _on_setting_changed(key: String) -> void:
@@ -329,6 +341,8 @@ func _start_countdown() -> void:
 		create_tween().tween_property(_dim, "color:a", 0.0, 0.4)
 	countdown = COUNTDOWN_SEC
 	state = State.COUNTDOWN
+	_count_shown = ""
+	Audio.set_battle(true)
 	print("round: countdown")
 
 
@@ -345,7 +359,18 @@ func _on_died(w: Wizard) -> void:
 	var dim_tw := create_tween()
 	dim_tw.tween_property(_dim, "color:a", 0.45, 1.2)
 	_hit_stop(0.12, 0.25, 0.9)
+	Audio.play("ko", w.position.x, 0.0, 0.0)
+	Audio.set_battle(false)
+	Audio.duck(-10.0, 4.0)
+	_victory_sting()
 	print("round: over, %s wins" % winner.display_name())
+
+
+## The fanfare follows the knockout once its boom has had its moment.
+func _victory_sting() -> void:
+	await get_tree().create_timer(1.3, true, false, true).timeout
+	if state == State.OVER:
+		Audio.ui("victory")
 
 
 func _update_hud() -> void:
@@ -366,6 +391,9 @@ func _update_hud() -> void:
 			hud.hint_text = "PUNCH forward = bolt    SWEEP sideways = wave    BOTH HANDS UP = shield    HANDS TOGETHER = heal"
 		State.COUNTDOWN:
 			hud.center_text = "FIGHT!" if countdown < 0.6 else str(ceili(countdown - 0.5))
+			if hud.center_text != _count_shown:
+				_count_shown = hud.center_text
+				Audio.ui("fight" if countdown < 0.6 else "count")
 			hud.sub_text = ""
 			hud.hint_text = ""
 		State.FIGHT:
@@ -399,6 +427,7 @@ func _heal(w: Wizard) -> void:
 	if not w.heal(_now()):
 		return
 	print("%s heals (hp %d, mana left %d)" % [w.display_name(), w.hp, w.mana])
+	Audio.play("heal", w.position.x, 0.0, 0.0)
 	var at := w.chest_global_position()
 	var c := Color(0.55, 1.0, 0.55)
 	FXRing.spawn(spells_root, at, c, 260.0, 0.6)
@@ -443,8 +472,11 @@ func _cast(kind: Spell.Kind, w: Wizard, origin: Vector2) -> void:
 		return
 	var cost := Spell.cost_of(kind)
 	if not w.can_cast(cost):
+		if w.hp > 0.0:
+			Audio.play("fizzle", w.position.x)   # out of mana: the gesture was seen, the spell was not there
 		return
 	w.spend_mana(cost)
+	Audio.play(("bolt_" if kind == Spell.Kind.BOLT else "wave_") + w.element, origin.x)
 	origin.y = clampf(origin.y, 200.0, 900.0)
 	origin.x += w.facing * 60.0
 	var s := Spell.make(kind, w.element, w, origin, w.facing)
@@ -516,6 +548,7 @@ func _resolve_clash(a: Spell, b: Spell) -> void:
 		if wave.power <= 0.0:
 			wave.extinguish()
 	_burst(mid, Color(1.0, 1.0, 1.0), 40)
+	Audio.play("clash", mid.x)
 	FXRing.spawn(spells_root, mid, Color(0.9, 0.85, 1.0), 180.0, 0.4)
 	fire.fx.burst_shards(mid, Color(0.95, 0.9, 1.0), 300.0)
 	FXBurst.spawn(spells_root, mid, a.element, 260.0, Color(1, 1, 1, 0.8))
@@ -529,6 +562,7 @@ func _resolve_hit(s: Spell, target: Wizard) -> void:
 		if s.kind == Spell.Kind.BOLT:
 			drain = SHIELD_DRAIN_FIRE_VS_WATER if s.element == "fire" else SHIELD_DRAIN_WATER_VS_FIRE
 		target.drain_mana(drain * s.power)
+		Audio.play("shield_block", target.position.x, 2.0 if s.kind == Spell.Kind.WAVE else 0.0)
 		_burst(s.position, target.color(), 30)
 		FXRing.spawn(spells_root, s.position, target.glow_color(), 220.0, 0.5)
 		target.fx.burst_shards(s.position, target.glow_color(), 360.0)
@@ -536,6 +570,9 @@ func _resolve_hit(s: Spell, target: Wizard) -> void:
 		_shake = maxf(_shake, 3.0)
 	else:
 		target.take_damage(s.damage * s.power)
+		# A wave lands lower and heavier than a bolt.
+		var heavy := s.kind == Spell.Kind.WAVE
+		Audio.play("hit_" + s.element, target.position.x, 2.0 if heavy else 0.0, 0.05, 0.84 if heavy else 1.0)
 		_burst(s.position, s.color(), 60)
 		FXRing.spawn(spells_root, s.position, s.bright_color(), 300.0, 0.55)
 		target.fx.burst_shards(s.position, s.bright_color(), 420.0)

@@ -57,6 +57,7 @@ both players raise their hands to fight again.
 - **Gesture sensitivity** - *High* for small children or a small room, *Low*
   if spells go off by accident.
 - **Fullscreen** (also F11), and whether the camera shows on the waiting screen.
+- **Music** and **Sound effects** volume; all the way down is off.
 
 Settings are kept between runs. To reset them delete `settings.cfg` in
 `%APPDATA%\Godot\app_userdata\Wizard Wars` (Windows) or

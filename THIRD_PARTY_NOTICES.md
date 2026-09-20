@@ -96,5 +96,8 @@ unmodified.
 
 ## Artwork
 
+The sound effects and music are synthesized by this project's own
+`tools/make_sounds.cpp`; no recordings or samples are used.
+
 The wizard, spell and interface art was generated for this game with AI image
 tools and edited by the author; the arena backdrop was supplied by the author.

@@ -19,6 +19,7 @@ config/features=PackedStringArray("4.4", "GL Compatibility")
 [autoload]
 
 Settings="*res://scripts/settings.gd"
+Audio="*res://scripts/audio.gd"
 BodyTracker="*res://tracking/body_tracker.gd"
 Tracking="*res://scripts/tracking.gd"
 

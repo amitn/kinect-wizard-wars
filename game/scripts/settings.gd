@@ -5,7 +5,7 @@ extends Node
 ##   Settings.set_value("fullscreen", false)  # applies, saves, emits changed("fullscreen")
 ##
 ## Command-line overrides (after `--`) win over the file and are never saved:
-##   --camera=auto|depth|rgb   --webcam=<index>   --windowed   --fullscreen
+##   --camera=auto|depth|rgb   --webcam=<index>   --windowed   --fullscreen   --mute
 ##   --no-save  keeps this run from writing the file (tests)
 
 signal changed(key: String)
@@ -27,6 +27,8 @@ const DEFAULTS := {
 	"sensitivity": 1,         # gestures: 0 low, 1 normal, 2 high
 	"fullscreen": true,
 	"camera_preview": true,   # show the camera while waiting for players
+	"music_volume": 70,       # percent; 0 mutes
+	"sfx_volume": 100,
 }
 
 var _values: Dictionary = DEFAULTS.duplicate()
@@ -49,6 +51,10 @@ var fullscreen: bool:
 	get: return get_value("fullscreen")
 var camera_preview: bool:
 	get: return get_value("camera_preview")
+var music_volume: int:
+	get: return get_value("music_volume")
+var sfx_volume: int:
+	get: return get_value("sfx_volume")
 
 
 func _ready() -> void:
@@ -68,6 +74,9 @@ func _ready() -> void:
 			_overrides["fullscreen"] = false
 		elif arg == "--fullscreen":
 			_overrides["fullscreen"] = true
+		elif arg == "--mute":
+			_overrides["music_volume"] = 0
+			_overrides["sfx_volume"] = 0
 		elif arg == "--no-save":
 			_persist = false
 	_apply_window()
@@ -85,8 +94,9 @@ func is_overridden(key: String) -> bool:
 
 
 ## Changing a value in the menu also drops a command-line override of it, so
-## what the player picks is what they get.
-func set_value(key: String, value: Variant) -> void:
+## what the player picks is what they get. `write` false applies the value without
+## touching the file, for a slider being dragged; save_now() writes it afterwards.
+func set_value(key: String, value: Variant, write: bool = true) -> void:
 	if not DEFAULTS.has(key):
 		push_warning("Settings: unknown key '%s'" % key)
 		return
@@ -94,10 +104,15 @@ func set_value(key: String, value: Variant) -> void:
 	if typeof(_values.get(key)) == typeof(value) and _values.get(key) == value:
 		return
 	_values[key] = value
-	_save()
+	if write:
+		_save()
 	if key == "fullscreen":
 		_apply_window()
 	changed.emit(key)
+
+
+func save_now() -> void:
+	_save()
 
 
 ## Gesture thresholds are divided by this: above 1 a smaller, slower move counts.

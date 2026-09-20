@@ -1,6 +1,6 @@
 class_name SettingsMenu
 extends CanvasLayer
-## The Esc menu: camera choice with a live preview, play options, quit.
+## The Esc menu: camera choice with a live preview, play options, volumes, quit.
 ## Pauses the game while it is open; tracking keeps running so a camera change
 ## can be seen working before the menu is closed. Mouse, or arrows + Enter.
 
@@ -22,6 +22,8 @@ var _mirror: CheckButton
 var _sensitivity: OptionButton
 var _fullscreen: CheckButton
 var _preview_toggle: CheckButton
+var _music: HSlider
+var _sfx: HSlider
 var _status: Label
 var _resume: Button
 var _webcam_names := PackedStringArray()
@@ -45,7 +47,10 @@ func open() -> void:
 	_load_values()
 	visible = true
 	get_tree().paused = true
+	_filling = true        # taking the focus is not the player moving it
 	_resume.grab_focus()
+	_filling = false
+	Audio.ui("ui_open")
 
 
 func close() -> void:
@@ -53,6 +58,8 @@ func close() -> void:
 		return
 	visible = false
 	get_tree().paused = false
+	Settings.save_now()    # sliders apply as they move and are written once, here
+	Audio.ui("ui_close")
 	closed.emit()
 
 
@@ -78,6 +85,8 @@ func _load_values() -> void:
 	_sensitivity.select(clampi(Settings.sensitivity, 0, 2))
 	_fullscreen.button_pressed = Settings.fullscreen
 	_preview_toggle.button_pressed = Settings.camera_preview
+	_music.value = Settings.music_volume
+	_sfx.value = Settings.sfx_volume
 	_fill_webcams()
 	_filling = false
 
@@ -117,6 +126,25 @@ func _on_toggle(pressed: bool, key: String) -> void:
 func _on_sensitivity(index: int) -> void:
 	if not _filling:
 		Settings.set_value("sensitivity", index)
+
+
+func _on_volume(value: float, key: String) -> void:
+	if _filling:
+		return
+	Settings.set_value(key, int(value), false)
+	if key == "sfx_volume":
+		Audio.ui("ui_move", 6.0)   # so the new level can be heard while it is set
+
+
+## Every control ticks when the focus lands on it and chimes when it is used.
+func _wire_sounds(control: Control) -> void:
+	control.focus_entered.connect(func():
+		if visible and not _filling:
+			Audio.ui("ui_move"))
+	if control is OptionButton:
+		control.item_selected.connect(func(_index): Audio.ui("ui_select"))
+	elif control is BaseButton:
+		control.pressed.connect(func(): Audio.ui("ui_select"))
 
 
 # -- Layout -------------------------------------------------------------------
@@ -170,6 +198,8 @@ func _build() -> void:
 	_sensitivity.item_selected.connect(_on_sensitivity)
 	_fullscreen = _toggle(grid, "Fullscreen  (F11)", "fullscreen")
 	_preview_toggle = _toggle(grid, "Show the camera while waiting", "camera_preview")
+	_music = _slider(grid, "Music", "music_volume")
+	_sfx = _slider(grid, "Sound effects", "sfx_volume")
 
 	var side := VBoxContainer.new()
 	side.add_theme_constant_override("separation", 10)
@@ -222,7 +252,35 @@ func _option(grid: GridContainer, text: String, items: Array) -> OptionButton:
 	for item in items:
 		option.add_item(item)
 	grid.add_child(option)
+	_wire_sounds(option)
 	return option
+
+
+func _slider(grid: GridContainer, text: String, key: String) -> HSlider:
+	_row_label(grid, text)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var slider := HSlider.new()
+	slider.min_value = 0
+	slider.max_value = 100
+	slider.step = 5
+	slider.custom_minimum_size = Vector2(420, 40)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var readout := Label.new()
+	readout.custom_minimum_size = Vector2(72, 0)
+	readout.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	readout.add_theme_color_override("font_color", TEXT)
+	slider.value_changed.connect(func(value: float): readout.text = "off" if value <= 0.0 else "%d%%" % int(value))
+	slider.value_changed.connect(_on_volume.bind(key))
+	slider.focus_entered.connect(func():
+		if visible and not _filling:
+			Audio.ui("ui_move"))
+	row.add_child(slider)
+	row.add_child(readout)
+	grid.add_child(row)
+	return slider
 
 
 func _toggle(grid: GridContainer, text: String, key: String) -> CheckButton:
@@ -231,6 +289,7 @@ func _toggle(grid: GridContainer, text: String, key: String) -> CheckButton:
 	toggle.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	toggle.toggled.connect(_on_toggle.bind(key))
 	grid.add_child(toggle)
+	_wire_sounds(toggle)
 	return toggle
 
 
@@ -240,6 +299,7 @@ func _button(parent: Control, text: String, action: Callable) -> Button:
 	button.custom_minimum_size = Vector2(240, 60)
 	button.pressed.connect(action)
 	parent.add_child(button)
+	_wire_sounds(button)
 	return button
 
 
@@ -272,6 +332,11 @@ func _make_theme() -> Theme:
 		theme.set_color("font_focus_color", type, Color.WHITE)
 		theme.set_color("font_disabled_color", type, Color(0.5, 0.5, 0.6))
 	theme.set_stylebox("focus", "CheckButton", focus)
+	var groove := _box(Color(0.1, 0.08, 0.2, 0.95), Color(ACCENT, 0.45), 2, 8, 6)
+	var filled := _box(Color(ACCENT, 0.85), Color(ACCENT, 0.0), 0, 8, 6)
+	theme.set_stylebox("slider", "HSlider", groove)
+	theme.set_stylebox("grabber_area", "HSlider", filled)
+	theme.set_stylebox("grabber_area_highlight", "HSlider", filled)
 	theme.set_stylebox("panel", "PopupMenu", _box(Color(0.06, 0.05, 0.14, 0.98), Color(ACCENT, 0.8), 2, 8, 8))
 	theme.set_stylebox("hover", "PopupMenu", _box(Color(0.24, 0.16, 0.46, 0.95), Color(0, 0, 0, 0), 0, 6, 4))
 	theme.set_color("font_color", "PopupMenu", TEXT)

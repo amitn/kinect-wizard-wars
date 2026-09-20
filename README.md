@@ -93,6 +93,17 @@ Everything in `game/art/` is generated with an image model (the `gen-image-cli` 
 
 The game runs without any of these files: `WizardFX` falls back to a procedural robed silhouette, drawn shield disc and shader-only arena. Sprites face right; the water wizard is mirrored in code to face the fire wizard.
 
+## Sound
+
+Every sound is synthesized by `tools/make_sounds.cpp` (plain C++, no libraries, about three seconds to run): 22 effects as mono WAV and two 40-second music layers as Ogg in `game/audio/`. Nothing is sampled, so there is no audio licensing to track.
+
+```
+g++ -O2 -std=c++17 tools/make_sounds.cpp -o /tmp/make_sounds && /tmp/make_sounds game/audio /tmp
+for m in calm battle; do ffmpeg -y -i /tmp/music_$m.wav -c:a libvorbis -q:a 4 game/audio/music_$m.ogg; done
+```
+
+The `Audio` autoload (`game/scripts/audio.gd`) plays them: `Audio.play(name, x)` places an effect left or right by where it happens on screen, so each wizard's spells come from their side; `Audio.ui(name)` is for the menu and the announcer. The music is one `AudioStreamSynchronized` of two layers that are the same length bar for bar: the calm layer always plays, the battle layer (drums and a bass pulse) fades in for the countdown and the fight and out at the knockout. The mix level of every effect is a table at the top of `audio.gd`; Music and Sound effects volumes are in the settings, and `-- --mute` silences a run. To replace a sound, drop a file with the same name into `game/audio/`.
+
 ## Body tracking (RTMPose, with or without depth)
 
 Skeletons come from **RTMPose** (MMPose) running inside the camera extension in C++ through ONNX
@@ -217,6 +228,8 @@ game/      Godot project
   export_presets.cfg             "Windows Desktop" preset used by CI
   scripts/settings.gd            autoload "Settings": user://settings.cfg, command-line overrides
   scripts/settings_menu.gd       the Esc menu
+  scripts/audio.gd               autoload "Audio": effects, stereo placement, the two music layers
+  audio/                         synthesized effects (WAV) and music layers (Ogg), from tools/make_sounds.cpp
   scripts/camera_view.gd         live camera image with skeletons (waiting screen, menu, debug)
   tracking/                      BodyTracker autoload: camera choice, RTMPose, players, gestures
   scripts/tracking.gd            autoload "Tracking": BodyTracker's players or UDP, as body frames
